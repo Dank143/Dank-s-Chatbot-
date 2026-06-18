@@ -1,0 +1,388 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Dank's Chatbot</title>
+  <link rel="icon"
+    href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='8' fill='%23111822'/><path d='M18 4 9 18h8l-3 10 14-16h-9z' fill='%2306b6d4'/></svg>" />
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+  <link href="https://fonts.googleapis.com/css2?family=Merriweather:ital,wght@0,400;0,700;1,400&display=swap"
+    rel="stylesheet" />
+  <link rel="stylesheet" href="base.css" />
+  <link rel="stylesheet" href="layout.css" />
+  <link rel="stylesheet" href="messages.css" />
+  <link rel="stylesheet" href="input.css" />
+  <link rel="stylesheet" href="modals.css" />
+  <!-- hljs themes – JS toggles which one is active -->
+  <link id="hljsDark" rel="stylesheet"
+    href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github-dark.min.css" />
+  <link id="hljsLight" rel="stylesheet" disabled
+    href="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/styles/github.min.css" />
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/highlight.js/11.9.0/highlight.min.js"></script>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.css">
+  <script src="https://cdn.jsdelivr.net/npm/katex@0.16.11/dist/katex.min.js"></script>
+</head>
+
+<body>
+
+  <!-- ═══════════════════════════  SIDEBAR  ═══════════════════════════ -->
+  <aside class="sidebar" id="sidebar">
+
+    <div class="sidebar-top">
+      <div class="logo">
+        <span class="logo-text">Dank's Feckin Chatbot</span>
+      </div>
+      <button class="icon-btn sidebar-toggle" id="sidebarToggle" title="Collapse sidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <rect x="3" y="3" width="18" height="18" rx="2" />
+          <line x1="9" y1="3" x2="9" y2="21" />
+        </svg>
+      </button>
+    </div>
+
+    <button class="new-chat-btn" id="newChatBtn">
+      <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+        <line x1="12" y1="5" x2="12" y2="19" />
+        <line x1="5" y1="12" x2="19" y2="12" />
+      </svg>
+      New chat
+    </button>
+
+    <!-- chat list -->
+    <div class="chat-list-wrapper">
+      <div class="section-label" id="starredLabel" style="display:none">Starred</div>
+      <div class="chat-list" id="starredList"></div>
+
+      <div class="section-label" id="recentsLabel">Recents</div>
+      <div class="chat-list" id="recentList"></div>
+    </div>
+
+    <div class="sidebar-footer">
+      <div class="user-row">
+        <div class="avatar">D</div>
+        <span class="user-name">Dang</span>
+        <span class="plan-badge">Badass Admin</span>
+      </div>
+    </div>
+  </aside>
+
+  <!-- ═══════════════════════════  MAIN  ═══════════════════════════════ -->
+  <main class="main" id="main">
+
+    <!-- top bar -->
+    <header class="topbar">
+      <button class="icon-btn" id="sidebarToggleMobile" title="Toggle sidebar">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+          <line x1="3" y1="6" x2="21" y2="6" />
+          <line x1="3" y1="12" x2="21" y2="12" />
+          <line x1="3" y1="18" x2="21" y2="18" />
+        </svg>
+      </button>
+      <div class="chat-title-group">
+        <span class="chat-title-display" id="chatTitleDisplay">Dank's Chatbot</span>
+        <button class="icon-btn" id="renameBtn" title="Rename chat" style="display:none">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7" />
+            <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z" />
+          </svg>
+        </button>
+      </div>
+      <div class="topbar-right">
+        <!-- Debug toggle -->
+        <button class="icon-btn" id="debugToggleBtn" title="Debug Mode: OFF">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+            stroke-linecap="round" stroke-linejoin="round">
+            <polyline points="4 17 10 11 4 5" />
+            <line x1="12" y1="19" x2="20" y2="19" />
+          </svg>
+        </button>
+        <!-- Tips (hover for info) -->
+        <div class="tips-wrap">
+          <button class="icon-btn" id="tipsBtn" title="Tips" aria-label="Tips">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path d="M9 18h6" />
+              <path d="M10 22h4" />
+              <path
+                d="M15.09 14c.18-.98.65-1.74 1.41-2.5A4.65 4.65 0 0 0 18 8 6 6 0 0 0 6 8c0 1 .23 2.23 1.5 3.5.76.76 1.23 1.52 1.41 2.5" />
+            </svg>
+          </button>
+          <div class="tips-popup" role="tooltip">
+            <div class="tips-popup-title">💡 Tips</div>
+            <p>All models are open-weight. Their knowledge cutoffs are around 2021 to 2024. For better results, enable
+              <strong>Web Search</strong> <svg width="13" height="13" viewBox="0 0 24 24" fill="none"
+                stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"
+                style="vertical-align:-2px">
+                <circle cx="12" cy="12" r="10" />
+                <line x1="2" y1="12" x2="22" y2="12" />
+                <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+              </svg> to pull in newer information.</p>
+          </div>
+        </div>
+
+        <!-- Theme toggle -->
+        <button class="icon-btn" id="themeToggleBtn" title="Toggle Theme">
+          <svg id="themeIconSun" width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2" style="display:none">
+            <circle cx="12" cy="12" r="5" />
+            <line x1="12" y1="1" x2="12" y2="3" />
+            <line x1="12" y1="21" x2="12" y2="23" />
+            <line x1="4.22" y1="4.22" x2="5.64" y2="5.64" />
+            <line x1="18.36" y1="18.36" x2="19.78" y2="19.78" />
+            <line x1="1" y1="12" x2="3" y2="12" />
+            <line x1="21" y1="12" x2="23" y2="12" />
+            <line x1="4.22" y1="19.78" x2="5.64" y2="18.36" />
+            <line x1="18.36" y1="5.64" x2="19.78" y2="4.22" />
+          </svg>
+          <svg id="themeIconMoon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+            stroke-width="2">
+            <path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" />
+          </svg>
+        </button>
+        <!-- Settings -->
+        <button class="icon-btn" id="settingsBtn" title="Settings">
+          <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+            <circle cx="12" cy="12" r="3" />
+            <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33
+            1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06
+            a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09
+            A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06
+            A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51
+            a1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9
+            a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z" />
+          </svg>
+        </button>
+      </div>
+    </header>
+
+    <!-- API key missing warning (top-center, shown when no key set) -->
+    <div class="api-key-warning" id="apiKeyWarning" style="display:none">
+      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+        stroke-linecap="round" stroke-linejoin="round">
+        <path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0z" />
+        <line x1="12" y1="9" x2="12" y2="13" />
+        <line x1="12" y1="17" x2="12.01" y2="17" />
+      </svg>
+      <span>No API key set. The chatbot won't respond until you add one. <button type="button"
+          id="apiKeyWarningLink">Change it here.</button></span>
+    </div>
+
+    <!-- welcome screen (greeting + input + chips centered as one group) -->
+    <div class="welcome" id="welcome">
+      <h1 id="welcomeGreeting"></h1>
+      <!-- inputArea is moved here by JS in home mode -->
+      <div class="question-chips" id="questionChips"></div>
+      <div class="topic-panel" id="topicPanel"></div>
+    </div>
+
+    <!-- messages -->
+    <div class="messages" id="messages" style="display:none"></div>
+
+    <!-- input area (lives here in chat mode, moved into #welcome in home mode) -->
+    <div class="input-area" id="inputArea" style="display:none">
+      <div class="input-box">
+        <div class="attachment-previews" id="attachmentPreviews"></div>
+        <textarea id="messageInput" placeholder="Write a message…" rows="1" maxlength="32000"></textarea>
+        <div class="input-actions">
+          <button class="icon-btn web-search-btn" id="webSearchToggle" type="button" title="Web Search: OFF">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <circle cx="12" cy="12" r="10" />
+              <line x1="2" y1="12" x2="22" y2="12" />
+              <path d="M12 2a15.3 15.3 0 0 1 4 10 15.3 15.3 0 0 1-4 10 15.3 15.3 0 0 1-4-10 15.3 15.3 0 0 1 4-10z" />
+            </svg>
+          </button>
+          <button class="icon-btn attach-btn" id="attachBtn" type="button" title="Attach File">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <path
+                d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48" />
+            </svg>
+          </button>
+          <input type="file" id="fileInput"
+            accept="image/jpeg,image/png,image/gif,image/webp,application/pdf,application/vnd.openxmlformats-officedocument.presentationml.presentation,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,.txt,.pdf,.pptx,.docx,.xlsx,.md,.markdown,.csv,.tsv,.yaml,.yml,.json,.xml,.toml,.ini,.env,.cfg,.conf,.py,.js,.ts,.jsx,.tsx,.mjs,.html,.htm,.css,.cpp,.c,.h,.hpp,.java,.cs,.go,.rs,.rb,.php,.swift,.kt,.sh,.bash,.ps1,.sql,.log,.r"
+            multiple style="display:none">
+          <button class="icon-btn mic-btn" id="micBtn" type="button" title="Speech To Text" style="display:none">
+            <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+              stroke-linecap="round" stroke-linejoin="round">
+              <rect x="9" y="2" width="6" height="12" rx="3" />
+              <path d="M5 10a7 7 0 0 0 14 0" />
+              <line x1="12" y1="19" x2="12" y2="22" />
+              <line x1="8" y1="22" x2="16" y2="22" />
+            </svg>
+          </button>
+          <button class="model-selector-btn" id="modelSelectorBtn" type="button">
+            <span id="modelSelectorBadge" class="provider-badge"></span>
+            <span id="modelSelectorLabel">Loading…</span>
+          </button>
+          <button class="send-btn" id="sendBtn" title="Send" disabled>
+            <svg id="sendIcon" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+              stroke-width="2.5">
+              <line x1="12" y1="19" x2="12" y2="5" />
+              <polyline points="5 12 12 5 19 12" />
+            </svg>
+            <svg id="stopIcon" width="14" height="14" viewBox="0 0 24 24" fill="currentColor" style="display:none">
+              <rect x="4" y="4" width="16" height="16" rx="2" />
+            </svg>
+          </button>
+        </div>
+      </div>
+      <p class="input-footer">Dank's Chatbot can make mistakes. Don't be a dumbass. Remember to verify important
+        information.</p>
+    </div>
+
+
+  </main>
+
+  <!-- ═══════════════════════════  MODEL PICKER MODAL  ════════════════ -->
+  <div class="modal-backdrop" id="dropdownBackdrop" style="display:none">
+    <div class="model-picker-modal" id="modelDropdown">
+      <div class="model-picker-header">
+        <h3>Select your preferred model. Models with * are vision-enabled.</h3>
+        <button class="icon-btn" id="modelModalCloseBtn" title="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+      <div class="model-search-wrap">
+        <input type="text" id="modelSearch" placeholder="Search models…" autocomplete="off" />
+        <div class="provider-pill" id="pickerProviderPill">
+          <button class="pill-opt active" data-provider="nim">NVIDIA NIM</button>
+          <button class="pill-opt" data-provider="ollama">Ollama</button>
+        </div>
+      </div>
+      <div class="model-picker-body" id="dropdownList"></div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════  IMAGE LIGHTBOX  ═════════════════════ -->
+  <div class="lightbox" id="lightbox" style="display:none">
+    <img class="lightbox-img" id="lightboxImg" src="" alt="">
+  </div>
+
+  <!-- ═══════════════════════════  CONFIRM MODAL  ══════════════════════ -->
+  <div class="modal-backdrop" id="confirmBackdrop" style="display:none">
+    <div class="modal confirm-modal">
+      <p class="confirm-message" id="confirmMessage"></p>
+      <div class="modal-actions">
+        <button class="btn-secondary" id="confirmCancelBtn">Cancel</button>
+        <button class="btn-danger" id="confirmOkBtn">Delete</button>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════  DOC VIEWER  ════════════════════════ -->
+  <div class="doc-viewer-backdrop" id="docViewerBackdrop" style="display:none">
+    <div class="doc-viewer">
+      <div class="doc-viewer-header">
+        <span id="docViewerName"></span>
+        <button class="icon-btn" id="docViewerClose" title="Close">✕</button>
+      </div>
+      <pre class="doc-viewer-content" id="docViewerContent"></pre>
+    </div>
+  </div>
+
+  <!-- ═══════════════════════════  SETTINGS MODAL  ═════════════════════ -->
+  <div class="modal-backdrop" id="settingsBackdrop" style="display:none">
+    <div class="modal settings-modal">
+      <div class="settings-header">
+        <h3>Settings</h3>
+        <button class="icon-btn" id="settingsCloseBtn" title="Close">
+          <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5">
+            <line x1="18" y1="6" x2="6" y2="18" />
+            <line x1="6" y1="6" x2="18" y2="18" />
+          </svg>
+        </button>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">
+          API Configuration
+          <div class="provider-pill" id="settingsProviderPill">
+            <button class="pill-opt active" data-provider="nim">NVIDIA NIM</button>
+            <button class="pill-opt" data-provider="ollama">Ollama</button>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-label" id="apiKeyLabel">Enter API Key</label>
+          <div class="key-input-wrap">
+            <input type="password" id="apiKeyInput" placeholder="nvapi-…" autocomplete="off" spellcheck="false" />
+            <button class="key-eye-btn" id="toggleKeyVisibility" type="button" title="Show / hide">
+              <svg id="eyeOpen" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2">
+                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z" />
+                <circle cx="12" cy="12" r="3" />
+              </svg>
+              <svg id="eyeClosed" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor"
+                stroke-width="2" style="display:none">
+                <path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94" />
+                <path d="M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19" />
+                <line x1="1" y1="1" x2="23" y2="23" />
+              </svg>
+            </button>
+          </div>
+          <div class="key-actions-row">
+            <p class="settings-hint" id="keyStatus"></p>
+            <button class="key-remove-btn" id="removeKeyBtn" type="button" style="display:none">× Remove key</button>
+            <a class="key-get-link" href="https://build.nvidia.com/nim" target="_blank" rel="noopener">Get key ↗</a>
+            <button class="btn-secondary key-verify-btn" id="verifyKeyBtn" type="button">Verify</button>
+          </div>
+        </div>
+
+        <div class="settings-field">
+          <label class="settings-label">Base URL</label>
+          <input type="text" id="baseUrlInput" placeholder="https://integrate.api.nvidia.com/v1" />
+          <p class="settings-hint">Change this to use a different OpenAI-compatible provider.</p>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Generation</div>
+        <div class="settings-field">
+          <label class="settings-label">
+            Temperature
+            <span id="tempValueBadge" class="settings-value-badge">0.70</span>
+          </label>
+          <input type="range" id="tempSlider" min="0" max="1" step="0.05" value="0.70" class="temp-slider" />
+          <div class="slider-ruler">
+            <span>0</span><span>0.5</span><span>1</span>
+          </div>
+          <p class="settings-hint">Lower = focused &amp; precise &nbsp;·&nbsp; Higher = creative &amp; random.</p>
+        </div>
+      </div>
+
+      <div class="settings-section">
+        <div class="settings-section-title">Web Search</div>
+        <div class="settings-field">
+          <div class="toggle-row">
+            <div>
+              <div class="settings-label">Auto-detect trigger words</div>
+              <p class="settings-hint">Automatically enables web search when your message contains trigger words
+                (search, latest news, weather, etc.).</p>
+            </div>
+            <label class="toggle-switch">
+              <input type="checkbox" id="autoSearchDetectToggle" />
+              <span class="toggle-track"></span>
+            </label>
+          </div>
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <button class="btn-secondary" id="settingsCancelBtn">Cancel</button>
+        <button class="btn-primary" id="settingsSaveBtn">Save changes</button>
+      </div>
+    </div>
+  </div>
+
+  <script type="module" src="js/app.js"></script>
+</body>
+
+</html>

@@ -1,0 +1,18 @@
+__pycache__/
+*.py[cod]
+
+# Project specifics
+.env
+chatbot.db
+chatbot.db-shm
+chatbot.db-wal
+
+# Virtual environments
+.venv/
+
+# IDE / OS / Temp
+.vscode/
+.DS_Store
+.claude
+.incase
+note.txt

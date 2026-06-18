@@ -1,0 +1,234 @@
+import {
+  state, $,
+  messagesEl, messageInput, renameBtn, chatTitleDisplay,
+  dropdownBackdrop, modelSearch, lightbox, lightboxImg,
+  autoResize, updateSendBtn, setWebSearch, setDebugMode, setProvider,
+} from './state.js';
+import { api } from './api.js';
+import { openDropdown, closeDropdown, renderDropdownList, updateModelLabel } from './models.js';
+import {
+  readFileAsDataUrl, readFileAsText, isImageFile, isTextFile,
+  renderPendingFiles, openDocViewer, closeDocViewer, _docStore,
+} from './files.js';
+import { openSettings, closeSettings, saveSettings, updateTempSlider, setKeyStatus, refreshApiKeyWarning } from './settings.js';
+import { toggleTheme } from './theme.js';
+import {
+  sendMessage, showWelcome, openChat, loadChats, startInlineRename, toggleSidebar,
+} from './chat.js';
+
+function stopStreaming() {
+  if (state.abortController) state.abortController.abort();
+}
+
+function openLightbox(src) {
+  lightboxImg.src = src;
+  lightbox.style.display = 'flex';
+}
+
+function closeLightbox() {
+  lightbox.style.display = 'none';
+  lightboxImg.src = '';
+}
+
+export function setupEventListeners() {
+  $('newChatBtn').addEventListener('click', showWelcome);
+
+  $('webSearchToggle').addEventListener('click', () => {
+    setWebSearch(!state.webSearch);
+    if (state.activeChatId) {
+      localStorage.setItem(`webSearch_${state.activeChatId}`, state.webSearch ? '1' : '0');
+    }
+  });
+  $('debugToggleBtn').addEventListener('click', () => setDebugMode(!state.debugMode));
+  $('sidebarToggle').addEventListener('click', toggleSidebar);
+  $('sidebarToggleMobile').addEventListener('click', toggleSidebar);
+  $('themeToggleBtn').addEventListener('click', toggleTheme);
+  $('settingsBtn').addEventListener('click', openSettings);
+  $('apiKeyWarningLink').addEventListener('click', openSettings);
+  refreshApiKeyWarning();
+
+  // Wire pill toggle buttons
+  document.querySelectorAll('.provider-pill').forEach(pill => {
+    pill.addEventListener('click', e => {
+      const btn = e.target.closest('.pill-opt');
+      if (!btn || btn.disabled) return;
+      const newProv = btn.dataset.provider;
+      if (newProv === state.provider) return;
+      
+      setProvider(newProv);
+      
+      // If we clicked inside Settings, reload settings for the new provider.
+      if (pill.id === 'settingsProviderPill') {
+        openSettings();
+      }
+      // If we clicked inside the Model Picker, we already synced state,
+      // so just re-render the list and update the input label.
+      if (pill.id === 'pickerProviderPill') {
+        renderDropdownList(state.models);
+        updateModelLabel();
+      }
+    });
+  });
+
+  renameBtn.addEventListener('click', () => {
+    if (state.activeChatId) {
+      const chat = state.chats.find((c) => c.id === state.activeChatId);
+      startInlineRename(chatTitleDisplay, state.activeChatId, chat?.title || '');
+    }
+  });
+
+  $('sendBtn').addEventListener('click', () => state.streaming ? stopStreaming() : sendMessage());
+
+  $('attachBtn').addEventListener('click', () => $('fileInput').click());
+
+  $('fileInput').addEventListener('change', async () => {
+    const MAX = 10 * 1024 * 1024;
+    for (const file of $('fileInput').files) {
+      if (state.pendingFiles.length >= 4) break;
+      if (file.size > MAX) { alert(`"${file.name}" exceeds the 10 MB limit.`); continue; }
+
+      if (isImageFile(file)) {
+        const dataUrl = await readFileAsDataUrl(file);
+        state.pendingFiles.push({ kind: 'image', name: file.name, dataUrl });
+      } else {
+        let text;
+        if (isTextFile(file)) {
+          text = await readFileAsText(file);
+        } else {
+          const form = new FormData();
+          form.append('file', file);
+          try {
+            const res = await fetch('/api/extract-text', { method: 'POST', body: form });
+            if (!res.ok) { const e = await res.json(); alert(`Could not read "${file.name}": ${e.detail}`); continue; }
+            ({ text } = await res.json());
+          } catch { alert(`Could not read "${file.name}"`); continue; }
+        }
+        state.pendingFiles.push({ kind: 'document', name: file.name, text });
+      }
+    }
+    $('fileInput').value = '';
+    renderPendingFiles();
+  });
+
+  messagesEl.addEventListener('click', (e) => {
+    if (e.target.classList.contains('msg-image')) { openLightbox(e.target.src); return; }
+    const chip = e.target.closest('.msg-doc-chip[data-doc-key]');
+    if (chip) {
+      const entry = _docStore.get(+chip.dataset.docKey);
+      if (entry) openDocViewer(entry.name, entry.text);
+    }
+  });
+
+  lightbox.addEventListener('click', closeLightbox);
+  $('docViewerBackdrop').addEventListener('click', (e) => { if (e.target === $('docViewerBackdrop')) closeDocViewer(); });
+  $('docViewerClose').addEventListener('click', closeDocViewer);
+  document.addEventListener('keydown', (e) => { if (e.key === 'Escape') { closeLightbox(); closeDocViewer(); } });
+
+  messageInput.addEventListener('input', () => { autoResize(); updateSendBtn(); });
+  messageInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }
+  });
+
+  $('modelSelectorBtn').addEventListener('click', (e) => {
+    e.stopPropagation();
+    dropdownBackdrop.style.display === 'none' ? openDropdown() : closeDropdown();
+  });
+
+  dropdownBackdrop.addEventListener('click', (e) => {
+    if (e.target === dropdownBackdrop) closeDropdown();
+  });
+
+  $('modelModalCloseBtn').addEventListener('click', closeDropdown);
+
+  modelSearch.addEventListener('input', () => {
+    const q = modelSearch.value.toLowerCase();
+    const filtered = state.models.filter(
+      (m) => m.name.toLowerCase().includes(q) || m.id.toLowerCase().includes(q)
+    );
+    renderDropdownList(filtered);
+  });
+
+  $('settingsCloseBtn').addEventListener('click', closeSettings);
+  $('settingsCancelBtn').addEventListener('click', closeSettings);
+  $('settingsSaveBtn').addEventListener('click', saveSettings);
+  $('settingsBackdrop').addEventListener('click', (e) => {
+    if (e.target === $('settingsBackdrop')) closeSettings();
+  });
+  $('apiKeyInput').addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') { e.preventDefault(); $('verifyKeyBtn').click(); }
+  });
+
+  $('tempSlider').addEventListener('input', () => updateTempSlider($('tempSlider').value));
+
+  $('toggleKeyVisibility').addEventListener('click', async () => {
+    const input = $('apiKeyInput');
+    const show = input.type === 'password';
+    if (show && input.dataset.sentinel) {
+      try {
+        const data = await api(`/settings?provider=${state.provider}`);
+        if (data.key) { input.value = data.key; delete input.dataset.sentinel; }
+      } catch { /* keep sentinel */ }
+    }
+    input.type = show ? 'text' : 'password';
+    $('eyeOpen').style.display   = show ? 'none' : '';
+    $('eyeClosed').style.display = show ? '' : 'none';
+  });
+
+  $('apiKeyInput').addEventListener('input', () => {
+    const el = $('apiKeyInput');
+    if (el.dataset.sentinel) {
+      delete el.dataset.sentinel;
+      setKeyStatus('Enter a new key, or leave blank to keep current.');
+    }
+  });
+
+  $('removeKeyBtn').addEventListener('click', () => {
+    const input = $('apiKeyInput');
+    input.value = '';
+    delete input.dataset.sentinel;
+    input.dataset.removeKey = '1';
+    $('removeKeyBtn').style.display = 'none';
+    setKeyStatus('Key will be removed on save.', 'warn');
+  });
+
+  $('verifyKeyBtn').addEventListener('click', async () => {
+    const input = $('apiKeyInput');
+    const key = input.dataset.sentinel ? null : input.value.trim();
+    const baseUrl = $('baseUrlInput').value.trim();
+    if (!key && !input.dataset.sentinel) {
+      setKeyStatus('Enter a key first.', 'warn');
+      return;
+    }
+    const btn = $('verifyKeyBtn');
+    btn.textContent = 'Verifying…';
+    btn.disabled = true;
+    setKeyStatus('');
+    try {
+      const body = { 
+        provider: state.provider,
+        base_url: baseUrl || (state.provider === 'nim' ? 'https://integrate.api.nvidia.com/v1' : 'https://api.ollama.com/v1') 
+      };
+      if (key) body.key = key;
+      else {
+        const cur = await api(`/settings?provider=${state.provider}`);
+        body.key = cur.key;
+      }
+      const res = await fetch('/api/verify-key', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await res.json();
+      if (data.valid) {
+        setKeyStatus(data.message || 'Key is valid!', 'ok');
+      } else {
+        setKeyStatus(data.error || 'Key is invalid.', 'warn');
+      }
+    } catch {
+      setKeyStatus('Verification failed — server error.', 'warn');
+    } finally {
+      btn.textContent = 'Verify key';
+      btn.disabled = false;
+    }
+  });
+}

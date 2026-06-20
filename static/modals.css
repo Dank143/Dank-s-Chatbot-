@@ -56,7 +56,7 @@
 }
 
 .model-search-wrap input::placeholder {
-  color: var(--text-muted);
+  color: var(--text-sub);
 }
 
 .model-picker-body {
@@ -875,7 +875,7 @@ body.light .model-stat-seg {
   font-family: inherit;
   border: none;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--text-sub);
   cursor: pointer;
   transition: color 0.3s cubic-bezier(0.4, 0, 0.2, 1);
   white-space: nowrap;
@@ -885,7 +885,7 @@ body.light .model-stat-seg {
 }
 
 .pill-opt:hover:not(.active) {
-  color: var(--text-sub);
+  color: var(--text);
 }
 
 .pill-opt.active {

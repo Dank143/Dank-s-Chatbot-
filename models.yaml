@@ -13,12 +13,10 @@ defaults:
   temperature: 0.0
   system_prompt: ""
 
-
 default_model_nim: openai/gpt-oss-120b
 default_model_ollama: gpt-oss:120b-cloud
 
 # There are other models, yet they suffer with major inconsistancies. If you don't mind gambling on their speed, include them here.
-
 models_nim: 
   # DeepSeek
   - { id: deepseek-ai/deepseek-v4-pro,                    name: "DeepSeek V4 Pro",            icon: "deepseek-color.png",   stats: {consistency: 5, accuracy: 10, latency: 6, mastery: 9} }
@@ -42,7 +40,7 @@ models_nim:
   - { id: mistralai/ministral-14b-instruct-2512,          name: "Ministral 14B Instruct*",    icon: "mistral-color.png",    stats: {consistency: 5, accuracy: 6, latency: 9, mastery: 5} }
 
   # Moonshot
-  - { id: moonshotai/kimi-k2.6,                           name: "Kimi K2.6*",                 icon: "moonshot.png",         stats: {consistency: 9, accuracy: 8, latency: 9, mastery: 10} }
+  - { id: moonshotai/kimi-k2.6,                           name: "Kimi K2.6*",                 icon: "moonshot.png",         stats: {consistency: 8, accuracy: 8, latency: 9, mastery: 10} }
 
   # NVIDIA
   - { id: nvidia/nemotron-3-super-120b-a12b,              name: "Nemotron 3 Super",           icon: "nvidia-color.png",     stats: {consistency: 6, accuracy: 7, latency: 6, mastery: 7} }
@@ -64,6 +62,9 @@ models_nim:
   - { id: z-ai/glm-5.1,                                   name: "GLM 5.1",                    icon: "zai.png",              stats: {consistency: 8, accuracy: 9, latency: 8, mastery: 9} }
 
 models_ollama:
+  # Essential
+  - { id: rnj-1:8b-cloud,                 name: "RNJ-1 8B",                  icon: "essentialai.png",       stats: {consistency: 7, accuracy: 6, latency: 10, mastery: 5} }
+
   # Google
   - { id: gemma4:31b-cloud,               name: "Gemma 4 31B*",              icon: "google-color.png",      stats: {consistency: 8, accuracy: 8, latency: 8, mastery: 7} }
   - { id: gemma3:27b-cloud,               name: "Gemma 3 27B",               icon: "google-color.png",      stats: {consistency: 8, accuracy: 7, latency: 8, mastery: 7} }
@@ -74,7 +75,6 @@ models_ollama:
   - { id: minimax-m2.1:cloud,             name: "MiniMax M2.1",              icon: "minimax-color.png",     stats: {consistency: 8, accuracy: 6, latency: 9, mastery: 5} }
 
   # Mistral
-  - { id: mistral-large-3:675b-cloud,     name: "Mistral Large 3 675B*",     icon: "mistral-color.png",     stats: {consistency: 5, accuracy: 8, latency: 9, mastery: 9} }
   - { id: ministral-3:14b-cloud,          name: "Ministral 3 14B*",          icon: "mistral-color.png",     stats: {consistency: 5, accuracy: 6, latency: 9, mastery: 5} }
   - { id: devstral-small-2:24b-cloud,     name: "Devstral Small 2 24B",      icon: "mistral-color.png",     stats: {consistency: 6, accuracy: 6, latency: 8, mastery: 6} }
 
@@ -89,6 +89,6 @@ models_ollama:
   # Qwen
   - { id: qwen3-coder:480b-cloud,         name: "Qwen3 Coder 480B",          icon: "qwen-color.png",        stats: {consistency: 5, accuracy: 9, latency: 5, mastery: 9} }
   - { id: qwen3-coder-next:cloud,         name: "Qwen3 Coder Next",          icon: "qwen-color.png",        stats: {consistency: 7, accuracy: 8, latency: 7, mastery: 8} }
-
-  # Essential
-  - { id: rnj-1:8b-cloud,                 name: "RNJ-1 8B",                  icon: "essentialai.png",       stats: {consistency: 7, accuracy: 6, latency: 10, mastery: 5} }
+  
+  # Zhipu AI
+  - { id: glm-4.7:cloud,                  name: "GLM 4.7",                   icon: "zai.png",               stats: {consistency: 8, accuracy: 9, latency: 9, mastery: 8} } 

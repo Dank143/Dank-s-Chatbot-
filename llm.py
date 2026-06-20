@@ -114,7 +114,14 @@ def build_messages(history, system_prompt: str | None, today: str | None = None,
         if i != last_user_idx:
             att["images"] = []
             att["documents"] = []
-        content = build_api_content(r["content"], att)
+            
+        raw_text = r["content"]
+        # Strip <think> blocks from historical assistant replies to save massive amounts of tokens!
+        if r["role"] == "assistant":
+            stripped = re.sub(r"<think>.*?</think>\n?", "", raw_text, flags=re.DOTALL).strip()
+            raw_text = stripped if stripped else "[Thought process omitted]"
+            
+        content = build_api_content(raw_text, att)
         # Substitute placeholder for empty content (stripped attachment-only turns).
         if isinstance(content, str) and not content.strip():
             content = "[image]" if had_images else "[document]" if had_documents else "[no content]"
@@ -132,9 +139,17 @@ def build_messages(history, system_prompt: str | None, today: str | None = None,
         else:
             messages.append(msg)
 
+    # Move `today` out of the system prompt to the end of the last user message.
+    # This prevents the system prompt from changing every minute (which breaks prefix caching).
+    # Phrasing it passively stops the model from randomly announcing the time.
+    if today and messages and messages[-1]["role"] == "user":
+        env_tag = f"\n\n[System note: Current time is {today}. Do not mention this unless relevant.]"
+        if isinstance(messages[-1]["content"], str):
+            messages[-1]["content"] += env_tag
+        else:
+            messages[-1]["content"].append({"type": "text", "text": env_tag})
+
     sys_parts: list[str] = []
-    if today:
-        sys_parts.append(f"Today's date is {today}.")
     if extra_system:
         sys_parts.append(extra_system)
     if system_prompt:
@@ -151,8 +166,9 @@ _CHANNEL_OPEN_RE = re.compile(r'<\|channel>[^\n]*\n?')
 
 async def llm_stream(client, model, messages, max_tokens, temperature, result: dict,
                      extra_create: dict | None = None):
-    """Stream model reply as SSE deltas, filtering <think> tags."""
+    """Stream model reply as SSE deltas, emitting <think> content separately."""
     full_content: list[str] = []
+    think_content: list[str] = []
     finish_reason = None
     lang_checked = False
     in_think = False
@@ -160,32 +176,39 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
     raw_chunks: list[str] = []  # raw model text (pre-think-filter), for blank rescue
     t_start = time.monotonic()  # request sent
     t_first = None              # first content chunk received (time-to-first-token)
+    t_think_start = None        # when thinking began
 
-    def _flush(text: str) -> str:
-        """Filter text through think-tag state machine."""
+    def _flush(text: str) -> tuple[str, str]:
+        """Filter text through think-tag state machine.
+
+        Returns (visible_text, thinking_text).
+        """
         nonlocal in_think, tag_buf
         s = tag_buf + text
         tag_buf = ""
-        out = []
+        visible: list[str] = []
+        thinking: list[str] = []
         while s:
             if in_think:
                 idx = s.find(_THINK_CLOSE)
                 if idx == -1:
+                    thinking.append(s[:-(len(_THINK_CLOSE) - 1)])
                     tag_buf = s[-(len(_THINK_CLOSE) - 1):]
                     break
+                thinking.append(s[:idx])
                 s = s[idx + len(_THINK_CLOSE):].lstrip("\n")
                 in_think = False
             else:
                 idx = s.find(_THINK_OPEN)
                 if idx == -1:
                     keep = len(_THINK_OPEN) - 1
-                    out.append(s[:-keep] if len(s) > keep else "")
+                    visible.append(s[:-keep] if len(s) > keep else "")
                     tag_buf = s[-keep:] if len(s) >= keep else s
                     break
-                out.append(s[:idx])
+                visible.append(s[:idx])
                 s = s[idx + len(_THINK_OPEN):]
                 in_think = True
-        return "".join(out)
+        return "".join(visible), "".join(thinking)
 
     last_exc = None
     for attempt in range(2):
@@ -205,16 +228,36 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
                 if choice.finish_reason:
                     finish_reason = choice.finish_reason
                 delta = choice.delta
-                if not delta or not delta.content:
+                # Debug: print what the API actually returned
+                # logger.info("API Delta: %s (extra: %s)", delta, getattr(delta, "model_extra", None))
+                
+                # Ollama/OpenAI reasoning field could be 'reasoning_content' or 'reasoning'.
+                reasoning = getattr(delta, "reasoning_content", None) or getattr(delta, "reasoning", None)
+                if not reasoning and hasattr(delta, "model_extra") and delta.model_extra:
+                    reasoning = delta.model_extra.get("reasoning_content") or delta.model_extra.get("reasoning")
+                    
+                if reasoning:
+                    if t_first is None:
+                        t_first = time.monotonic()
+                    if t_think_start is None:
+                        t_think_start = time.monotonic()
+                    think_content.append(reasoning)
+                    yield f"data: {json.dumps({'type': 'thinking', 'content': reasoning})}\n\n"
+                if not delta.content:
                     continue
                 if t_first is None:
                     t_first = time.monotonic()
                 chunk = _CHANNEL_OPEN_RE.sub(_THINK_OPEN, delta.content).replace("<channel|>", _THINK_CLOSE)
                 raw_chunks.append(chunk)
-                filtered = _flush(chunk)
-                if not filtered:
+                visible, thinking = _flush(chunk)
+                if thinking:
+                    if t_think_start is None:
+                        t_think_start = time.monotonic()
+                    think_content.append(thinking)
+                    yield f"data: {json.dumps({'type': 'thinking', 'content': thinking})}\n\n"
+                if not visible:
                     continue
-                full_content.append(filtered)
+                full_content.append(visible)
                 if not lang_checked:
                     sample = "".join(full_content)
                     # Wait for 60+ chars to avoid false positives from stray CJK.
@@ -224,7 +267,11 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
                             logger.warning("llm_abort non_english model=%s sample=%r", model, sample[:60])
                             yield f"data: {json.dumps({'type': 'error', 'message': 'Model responded in a non-English language. Try rephrasing your question or switching models.'})}\n\n"
                             return
-                yield f"data: {json.dumps({'type': 'delta', 'content': filtered})}\n\n"
+                # Signal end of thinking phase when the first visible delta arrives.
+                if think_content and len(full_content) == 1:
+                    think_secs = round(time.monotonic() - t_think_start) if t_think_start else 0
+                    yield f"data: {json.dumps({'type': 'thinking_done', 'duration': think_secs})}\n\n"
+                yield f"data: {json.dumps({'type': 'delta', 'content': visible})}\n\n"
             last_exc = None
             break
         except Exception as exc:
@@ -241,7 +288,9 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
                 tag_buf = ""
                 lang_checked = False
                 t_first = None
+                t_think_start = None
                 raw_chunks.clear()
+                think_content.clear()
                 await asyncio.sleep(0.6)
                 continue
             last_exc = exc
@@ -260,15 +309,21 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
         full_content.append(tag_buf)
         yield f"data: {json.dumps({'type': 'delta', 'content': tag_buf})}\n\n"
 
+    # If thinking ended but no visible content arrived, send thinking_done now.
+    if think_content and not full_content:
+        think_secs = round(time.monotonic() - t_think_start) if t_think_start else 0
+        yield f"data: {json.dumps({'type': 'thinking_done', 'duration': think_secs})}\n\n"
+
     # Rescue unclosed <think>: replay raw stream if visible output is blank.
     if in_think and not "".join(full_content).strip():
-        salvaged = "".join(raw_chunks).replace(_THINK_OPEN, "").strip()
+        salvaged = "".join(raw_chunks).replace(_THINK_OPEN, "").replace(_THINK_CLOSE, "").strip()
         if salvaged:
             logger.warning("llm_rescue unclosed_think model=%s chars=%d", model, len(salvaged))
             full_content.append(salvaged)
             yield f"data: {json.dumps({'type': 'delta', 'content': salvaged})}\n\n"
 
     visible = "".join(full_content)
+    think_text = "".join(think_content)
     raw_len = sum(len(c) for c in raw_chunks)
     now = time.monotonic()
     ttft = (t_first - t_start) if t_first else (now - t_start)
@@ -276,12 +331,13 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
     # Diagnostic log: finish=length→token cap, raw>0 visible=0→think-eaten.
     log = logger.warning if (not visible.strip() or finish_reason not in ("stop", None)) else logger.info
     log(
-        "llm_done model=%s finish=%s raw_chars=%d visible_chars=%d unclosed_think=%s "
+        "llm_done model=%s finish=%s raw_chars=%d visible_chars=%d think_chars=%d unclosed_think=%s "
         "ttft=%.2fs gen=%.2fs total=%.2fs",
-        model, finish_reason, raw_len, len(visible), in_think,
+        model, finish_reason, raw_len, len(visible), len(think_text), in_think,
         ttft, gen, now - t_start,
     )
 
-    # Blank reply left as "" — caller decides retry/surface behavior.
-    result["content"] = visible
+    # Persist thinking wrapped in <think> tags so the frontend can re-render it on reload.
+    saved = (f"{_THINK_OPEN}{think_text}{_THINK_CLOSE}\n" if think_text else "") + visible
+    result["content"] = saved
     result["finish_reason"] = finish_reason

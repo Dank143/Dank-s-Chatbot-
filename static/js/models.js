@@ -11,7 +11,7 @@ const PROVIDER_NAMES = {
 export function getProviderName(model) {
   let modelId = '';
   let icon = '';
-  
+
   if (typeof model === 'string') {
     modelId = model;
     const fullModel = state.models?.find(m => m.id === model);
@@ -22,7 +22,7 @@ export function getProviderName(model) {
     modelId = model.id || '';
     icon = model.icon || '';
   }
-  
+
   icon = icon.toLowerCase();
   if (icon.includes('google')) return 'Google';
   if (icon.includes('deepseek')) return 'DeepSeek AI';
@@ -35,7 +35,7 @@ export function getProviderName(model) {
   if (icon.includes('qwen')) return 'Qwen';
   if (icon.includes('stepfun')) return 'StepFun AI';
   if (icon.includes('zai')) return 'Z.ai';
-  if (icon.includes('essentialai')) return 'RNJ';
+  if (icon.includes('essentialai')) return 'Essential AI';
   if (icon.includes('bytedance')) return 'ByteDance';
   if (icon.includes('microsoft')) return 'Microsoft';
 
@@ -58,7 +58,7 @@ function badgeInner(icon, label, imgPx) {
 
 export function badgeHtml(modelId, size) {
   const model = state.models.find((m) => m.id === modelId);
-  const icon  = model?.icon || null;
+  const icon = model?.icon || null;
   const label = badgeLabel(model, modelId);
   const fs = Math.round(size * 0.38);
   const inner = badgeInner(icon, label, Math.round(size * 0.65));
@@ -101,12 +101,12 @@ export function renderDropdownList(models) {
       card.className = 'model-card' + (m.id === state.selectedModel ? ' selected' : '');
 
       // Single color bar (swap comment blocks for gradient).
-      const STAT_COLOR = '#0088FF'; 
-      const statColors = Array(10).fill(STAT_COLOR);      
+      const STAT_COLOR = '#0088FF';
+      const statColors = Array(10).fill(STAT_COLOR);
       // const statColors = ['#7A6BFF','#3B9EFF','#22C7E6','#1FD6A0','#3BD23B','#A8E635','#FFE030','#FFB52E','#FF7A30','#FF3B30'];
       // const statColors = ['#4DA6FF','#3B9DFF','#2B95FF','#1A8CFF','#0884FF','#007BF7','#0073E6','#006AD4','#0062C4','#0059B3'];
 
-      const statBar = v => Array.from({length: 10}, (_, i) =>
+      const statBar = v => Array.from({ length: 10 }, (_, i) =>
         `<span class="model-stat-seg${i < v ? ' filled' : ''}"${i < v ? ` style="background:${statColors[i]}"` : ''}></span>`).join('');
       const statLabel = k => k.charAt(0).toUpperCase() + k.slice(1);
       const statRows = m.stats ? Object.entries(m.stats).map(([k, v]) =>
@@ -137,9 +137,9 @@ export function selectModel(id) {
   fetch('/api/warmup', {
     method: 'POST', headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ model: id }),
-  }).catch(() => {});
+  }).catch(() => { });
   if (state.activeChatId) {
-    api(`/chats/${state.activeChatId}`, { method: 'PATCH', body: { model: id } }).catch(() => {});
+    api(`/chats/${state.activeChatId}`, { method: 'PATCH', body: { model: id } }).catch(() => { });
   }
 }
 
@@ -152,10 +152,10 @@ export function openDropdown() {
     'ollama': state.hasKeyOllama || (state.modelsOllama.length > 0)
   };
   const anyHasKey = Object.values(hasKeyMap).some(v => v);
-  
+
   document.querySelectorAll('#pickerProviderPill .pill-opt').forEach(btn => {
     btn.classList.toggle('active', state.provider && btn.dataset.provider === state.provider);
-    
+
     // Gray out/disable the pill toggle if the API key for that provider is blank
     const prov = btn.dataset.provider;
     btn.disabled = !hasKeyMap[prov];
@@ -177,10 +177,10 @@ export async function loadModels() {
     api('/settings?provider=nim').catch(() => ({ has_key: false })),
     api('/settings?provider=ollama').catch(() => ({ has_key: false }))
   ]);
-  
+
   state.modelsNim = nimData.models || [];
   state.defaultModelNim = nimData.default || nimData.models[0]?.id;
-  
+
   state.modelsOllama = ollamaData.models || [];
   state.defaultModelOllama = ollamaData.default || ollamaData.models[0]?.id;
 
@@ -198,10 +198,10 @@ export async function loadModels() {
       else if (state.hasKeyOllama) initialProvider = 'ollama';
     }
   }
-  
+
   setProvider(initialProvider);
   state.selectedModel = state.defaultModel;
-  
+
   updateModelLabel();
   renderDropdownList(state.models);
 }

@@ -153,8 +153,15 @@
   flex-shrink: 0;
 }
 
-.user-name { font-size: 13px; font-weight: 500; flex: 1; color: var(--text); }
+.user-info {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 0;
+}
 
+.user-name { font-size: 13px; font-weight: 500; color: var(--text); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.user-subtext { font-size: 11px; color: var(--text-muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .plan-badge {
   font-size: 10px;
   font-weight: 700;

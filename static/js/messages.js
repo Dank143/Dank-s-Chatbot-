@@ -6,6 +6,13 @@ import { badgeHtml } from './models.js';
 import { streamAssistant } from './stream.js';
 import { ICON, assistantActions } from './icons.js';
 
+// Extract <think>...</think> from persisted message content.
+function extractThink(content) {
+  const match = content.match(/^<think>([\s\S]*?)<\/think>\n?/);
+  if (!match) return { think: '', visible: content };
+  return { think: match[1], visible: content.slice(match[0].length) };
+}
+
 // Thinking indicator: hourglass + random phrase with cycling dots.
 const THINKING_PHRASES = ['Brainstorming', 'Pondering', 'Thinking'];
 export function thinkingIndicator() {
@@ -45,13 +52,13 @@ export function appendMessage(msg, streaming = false) {
       : '';
     const docsHtml = docs.length
       ? `<div class="msg-docs">${docs.map(d => {
-          if (d.text) {
-            const k = nextDocKey();
-            _docStore.set(k, { name: d.name, text: d.text });
-            return `<span class="msg-doc-chip" data-doc-key="${k}">${DOC_ICON}<span>${escHtml(d.name)}</span></span>`;
-          }
-          return `<span class="msg-doc-chip">${DOC_ICON}<span>${escHtml(d.name)}</span></span>`;
-        }).join('')}</div>`
+        if (d.text) {
+          const k = nextDocKey();
+          _docStore.set(k, { name: d.name, text: d.text });
+          return `<span class="msg-doc-chip" data-doc-key="${k}">${DOC_ICON}<span>${escHtml(d.name)}</span></span>`;
+        }
+        return `<span class="msg-doc-chip">${DOC_ICON}<span>${escHtml(d.name)}</span></span>`;
+      }).join('')}</div>`
       : '';
     wrapper.innerHTML = `
       <div class="bubble">${imagesHtml}${docsHtml}${escHtml(msg.content)}</div>
@@ -61,17 +68,33 @@ export function appendMessage(msg, streaming = false) {
       </div>
     `;
   } else {
+    const { think, visible } = extractThink(msg.content);
     const modelName = state.models.find((m) => m.id === state.selectedModel)?.name || '';
+    let thinkBlockHtml = '';
+    if (think && !streaming) {
+      thinkBlockHtml = `
+        <div class="think-block">
+          <div class="think-toggle">
+            <svg class="think-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            <span class="think-label">Thought process</span>
+          </div>
+          <div class="think-content">${renderMarkdown(think)}</div>
+        </div>`;
+    }
     wrapper.innerHTML = `
       <div class="assistant-header">
         ${badgeHtml(state.selectedModel, 26)}
         ${modelName ? `<span class="model-tag">${escHtml(modelName)}</span>` : ''}
       </div>
-      <div class="bubble" data-raw="${escAttr(msg.content)}">
-        ${streaming ? thinkingIndicator() : renderMarkdown(msg.content)}
+      ${thinkBlockHtml}
+      <div class="bubble" data-raw="${escAttr(visible)}">
+        ${streaming ? thinkingIndicator() : renderMarkdown(visible)}
       </div>
       ${!streaming ? assistantActions : ''}
     `;
+    // Attach click handler for think-toggle
+    const toggle = wrapper.querySelector('.think-toggle');
+    if (toggle) toggle.addEventListener('click', () => toggle.closest('.think-block').classList.toggle('expanded'));
   }
 
   messagesEl.appendChild(wrapper);
@@ -92,6 +115,12 @@ export function finalizeStreamingMessage(wrapper) {
   if (raw) bubble.innerHTML = renderMarkdown(raw);
   else { bubble.querySelector('.streaming-cursor')?.remove(); bubble.querySelector('.thinking-indicator')?.remove(); }
   wrapper.insertAdjacentHTML('beforeend', assistantActions);
+  // Attach click handler to think-toggle if present
+  const toggle = wrapper.querySelector('.think-toggle');
+  if (toggle && !toggle.dataset.bound) {
+    toggle.dataset.bound = '1';
+    toggle.addEventListener('click', () => toggle.closest('.think-block').classList.toggle('expanded'));
+  }
 }
 
 export function showTruncationNotice(wrapper) {
@@ -113,7 +142,7 @@ export function showStoppedNotice(wrapper) {
     <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
       <rect x="3" y="3" width="18" height="18" rx="2"/>
     </svg>
-    Generation stopped.`;
+    Generation Stopped.`;
   wrapper.appendChild(notice);
 }
 
@@ -124,7 +153,9 @@ export function showMessageError(wrapper, msg) {
 }
 
 export function copyMessage(btn) {
-  const bubble = btn.closest('.message-wrapper').querySelector('.bubble');
+  const wrapper = btn.closest('.message-wrapper');
+  const bubble = wrapper.querySelector('.bubble');
+  // Copy only the visible answer, not the thinking content
   const text = bubble.dataset.raw || bubble.textContent;
   navigator.clipboard.writeText(text).then(() => {
     btn.classList.add('copied');
@@ -279,11 +310,13 @@ export async function editMessage(btn) {
 
     await streamAssistant(
       `/api/chats/${state.activeChatId}/messages`,
-      { content: newContent, model: state.selectedModel,
+      {
+        content: newContent, model: state.selectedModel,
         images: images.length ? images : undefined,
         documents: docs.length ? docs : undefined,
         web_search: state.webSearch || needsWebSearch(newContent) || undefined,
-        client_time: clientTime() },
+        client_time: clientTime()
+      },
       userWrapper, assistantWrapper
     );
 
@@ -311,9 +344,11 @@ export async function retryMessage(btn) {
 
   await streamAssistant(
     `/api/chats/${state.activeChatId}/regenerate`,
-    { model: state.selectedModel,
+    {
+      model: state.selectedModel,
       web_search: state.webSearch || needsWebSearch(lastUserText) || undefined,
-      client_time: clientTime() },
+      client_time: clientTime()
+    },
     null, assistantWrapper
   );
 

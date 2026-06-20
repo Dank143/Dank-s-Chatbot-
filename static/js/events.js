@@ -54,9 +54,9 @@ export function setupEventListeners() {
       if (!btn || btn.disabled) return;
       const newProv = btn.dataset.provider;
       if (newProv === state.provider) return;
-      
+
       setProvider(newProv);
-      
+
       // If we clicked inside Settings, reload settings for the new provider.
       if (pill.id === 'settingsProviderPill') {
         openSettings();
@@ -84,7 +84,7 @@ export function setupEventListeners() {
   $('fileInput').addEventListener('change', async () => {
     const MAX = 10 * 1024 * 1024;
     for (const file of $('fileInput').files) {
-      if (state.pendingFiles.length >= 4) break;
+      if (state.pendingFiles.length >= 10) break;
       if (file.size > MAX) { alert(`"${file.name}" exceeds the 10 MB limit.`); continue; }
 
       if (isImageFile(file)) {
@@ -170,7 +170,7 @@ export function setupEventListeners() {
       } catch { /* keep sentinel */ }
     }
     input.type = show ? 'text' : 'password';
-    $('eyeOpen').style.display   = show ? 'none' : '';
+    $('eyeOpen').style.display = show ? 'none' : '';
     $('eyeClosed').style.display = show ? '' : 'none';
   });
 
@@ -204,9 +204,9 @@ export function setupEventListeners() {
     btn.disabled = true;
     setKeyStatus('');
     try {
-      const body = { 
+      const body = {
         provider: state.provider,
-        base_url: baseUrl || (state.provider === 'nim' ? 'https://integrate.api.nvidia.com/v1' : 'https://api.ollama.com/v1') 
+        base_url: baseUrl || (state.provider === 'nim' ? 'https://integrate.api.nvidia.com/v1' : 'https://api.ollama.com/v1')
       };
       if (key) body.key = key;
       else {

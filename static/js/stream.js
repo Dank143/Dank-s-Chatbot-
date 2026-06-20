@@ -41,9 +41,11 @@ export async function streamAssistant(endpoint, body, userWrapper, assistantWrap
   const signal = state.abortController.signal;
   // Track raw text and finalization state for abort/error handling.
   let raw = '';
+  let thinkRaw = '';
   let finished = false;
   let finalized = false;
   let streamFinished = false;
+  let thinkStartTime = null;
   try {
     const res = await fetch(endpoint, {
       method: 'POST',
@@ -111,6 +113,59 @@ export async function streamAssistant(endpoint, body, userWrapper, assistantWrap
           chatTitleDisplay.textContent = evt.title;
           const chat = state.chats.find(c => c.id === state.activeChatId);
           if (chat) chat.title = evt.title;
+        } else if (evt.type === 'thinking') {
+          streamBubble?.querySelector('.search-indicator')?.remove();
+          streamBubble?.querySelector('.thinking-indicator')?.remove();
+          if (!thinkStartTime) thinkStartTime = performance.now();
+          thinkRaw += evt.content;
+          if (streamBubble) {
+            let block = assistantWrapper.querySelector('.think-block');
+            if (!block) {
+              block = document.createElement('div');
+              block.className = 'think-block streaming expanded';
+              block.innerHTML = `
+                <div class="think-toggle">
+                  <svg class="think-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+                  <span class="think-label">Thinking<span class="thinking-dots"></span></span>
+                </div>
+                <div class="think-content"></div>`;
+              assistantWrapper.insertBefore(block, streamBubble);
+              
+              const toggle = block.querySelector('.think-toggle');
+              toggle.dataset.bound = '1';
+              toggle.addEventListener('click', () => block.classList.toggle('expanded'));
+            }
+            block.dataset.think = thinkRaw;
+            
+            // Throttle markdown re-parsing for the thinking block.
+            const now = performance.now();
+            if (!renderScheduled && now - lastRender >= RENDER_INTERVAL) {
+              renderScheduled = true;
+              lastRender = now;
+              requestAnimationFrame(() => {
+                renderScheduled = false;
+                if (!streamFinished) {
+                  const activeBlock = assistantWrapper.querySelector('.think-block.streaming .think-content');
+                  if (activeBlock) {
+                    activeBlock.innerHTML = renderMarkdown(thinkRaw);
+                    scrollToBottom();
+                  }
+                }
+              });
+            }
+          }
+        } else if (evt.type === 'thinking_done') {
+          const block = assistantWrapper.querySelector('.think-block');
+          if (block) {
+            block.classList.remove('streaming');
+            block.classList.remove('expanded'); // Collapse when thinking finishes
+            const secs = evt.duration || Math.round((performance.now() - (thinkStartTime || performance.now())) / 1000);
+            const label = block.querySelector('.think-label');
+            if (label) label.textContent = `Thought for ${secs}s`;
+            // Render thinking content as markdown
+            const content = block.querySelector('.think-content');
+            if (content) content.innerHTML = renderMarkdown(thinkRaw);
+          }
         } else if (evt.type === 'delta') {
           streamBubble?.querySelector('.search-indicator')?.remove();
           streamBubble?.querySelector('.thinking-indicator')?.remove();
@@ -155,7 +210,21 @@ export async function streamAssistant(endpoint, body, userWrapper, assistantWrap
       const rawSoFar = assistantWrapper.querySelector('.bubble')?.dataset.raw || '';
       if (signal.aborted) {
         // User pressed stop — not an error
-        if (rawSoFar.trim()) { finalizeStreamingMessage(assistantWrapper); showStoppedNotice(assistantWrapper); }
+        if (rawSoFar.trim() || thinkRaw.trim()) {
+          // Finalize any in-progress thinking block
+          const block = assistantWrapper.querySelector('.think-block.streaming');
+          if (block) {
+            block.classList.remove('streaming');
+            block.classList.remove('expanded');
+            const secs = thinkStartTime ? Math.round((performance.now() - thinkStartTime) / 1000) : 0;
+            const label = block.querySelector('.think-label');
+            if (label) label.textContent = `Thought for ${secs}s`;
+            const content = block.querySelector('.think-content');
+            if (content) content.innerHTML = renderMarkdown(thinkRaw);
+          }
+          finalizeStreamingMessage(assistantWrapper);
+          showStoppedNotice(assistantWrapper);
+        }
         else assistantWrapper.remove();
       } else if (!rawSoFar.trim()) {
         showMessageError(assistantWrapper, 'Model returned an empty response. Try again or switch models.');
@@ -169,8 +238,10 @@ export async function streamAssistant(endpoint, body, userWrapper, assistantWrap
       // Only save/finalize if message hadn't already finished.
       if (!finalized) {
         if (raw && state.activeChatId) {
+          // Save with thinking content included for persistence
+          const saveContent = thinkRaw ? `<think>${thinkRaw}</think>\n${raw}` : raw;
           const saved = await api(`/chats/${state.activeChatId}/messages/assistant`, {
-            method: 'POST', body: { content: raw },
+            method: 'POST', body: { content: saveContent },
           }).catch(() => null);
           if (saved?.id) assistantWrapper.dataset.msgId = saved.id;
         } else if (!raw) {

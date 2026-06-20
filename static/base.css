@@ -14,7 +14,7 @@
 
   --text:         #e8f6fa;
   --text-sub:     #cddddd;
-  --text-muted:   #374e64;
+  --text-muted:   #99aabb;
 
   --border:       #1c2d3e;
   --border-input: #243447;
@@ -30,7 +30,7 @@
   --radius-sm:    8px;
   --radius-xs:    6px;
 
-  --sidebar-w:    268px;
+  --sidebar-w:    300px;
   --transition:   .15s ease;
 
   font-family: "Merriweather", Georgia, serif;

@@ -51,13 +51,13 @@ def _fallback_title(text: str) -> str:
     return text[:60].strip() + ("…" if len(text) > 60 else "")
 
 
-def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None") -> None:
+def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None", model: "str | None" = None) -> None:
     """Persist an assistant message, bump the chat, and optionally set its title."""
     with get_db() as conn:
         ts = now_iso()
         conn.execute(
-            "INSERT INTO messages (id, chat_id, role, content, created_at) VALUES (?,?,?,?,?)",
-            (msg_id, chat_id, "assistant", content, ts),
+            "INSERT INTO messages (id, chat_id, role, content, created_at, model) VALUES (?,?,?,?,?,?)",
+            (msg_id, chat_id, "assistant", content, ts, model),
         )
         conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (ts, chat_id))
         if title:
@@ -138,8 +138,8 @@ async def send_message(chat_id: str, body: SendMessageBody):
             model: str = str(body.model or chat["model"] or cfg.get("default_model") or "")
             ts = now_iso()
             conn.execute(
-                "INSERT INTO messages (id, chat_id, role, content, created_at, attachments) VALUES (?,?,?,?,?,?)",
-                (user_msg_id, chat_id, "user", body.content, ts, att_json),
+                "INSERT INTO messages (id, chat_id, role, content, created_at, attachments, model) VALUES (?,?,?,?,?,?,?)",
+                (user_msg_id, chat_id, "user", body.content, ts, att_json, model),
             )
             conn.execute("UPDATE chats SET model=?, updated_at=? WHERE id=?", (model, ts, chat_id))
             history = conn.execute(
@@ -189,7 +189,7 @@ async def send_message(chat_id: str, body: SendMessageBody):
         creator_resp = is_asking_about_creator(body.content)
         if creator_resp:
             fallback = _fallback_title(body.content) if needs_title and body.content else None
-            await asyncio.to_thread(_save_assistant, chat_id, asst_msg_id, creator_resp, fallback)
+            await asyncio.to_thread(_save_assistant, chat_id, asst_msg_id, creator_resp, fallback, model)
             yield f"data: {json.dumps({'type': 'delta', 'content': creator_resp})}\n\n"
             if fallback:
                 yield f"data: {json.dumps({'type': 'title', 'title': fallback})}\n\n"
@@ -222,7 +222,7 @@ async def send_message(chat_id: str, body: SendMessageBody):
             return
 
         # Persist answer and emit 'done' before resolving the title.
-        await asyncio.to_thread(_save_assistant, chat_id, asst_msg_id, hail + result["content"], None)
+        await asyncio.to_thread(_save_assistant, chat_id, asst_msg_id, hail + result["content"], None, model)
         yield f"data: {json.dumps({'type': 'done', 'asst_msg_id': asst_msg_id, 'finish_reason': result.get('finish_reason')})}\n\n"
 
         if needs_title:
@@ -271,8 +271,8 @@ async def save_assistant_message(chat_id: str, body: SaveAssistantBody):
                 raise HTTPException(404, "Chat not found")
             ts = now_iso()
             conn.execute(
-                "INSERT INTO messages (id, chat_id, role, content, created_at) VALUES (?,?,?,?,?)",
-                (msg_id, chat_id, "assistant", body.content, ts),
+                "INSERT INTO messages (id, chat_id, role, content, created_at, model) VALUES (?,?,?,?,?,?)",
+                (msg_id, chat_id, "assistant", body.content, ts, chat["model"]),
             )
             conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (ts, chat_id))
     await asyncio.to_thread(_work)
@@ -341,7 +341,7 @@ async def regenerate_response(chat_id: str, body: RegenerateBody):
         if not result["content"].strip():
             yield f"data: {json.dumps({'type': 'error', 'message': 'The model returned an empty response. Please try again.'})}\n\n"
             return
-        await asyncio.to_thread(_save_assistant, chat_id, asst_msg_id, result["content"], None)
+        await asyncio.to_thread(_save_assistant, chat_id, asst_msg_id, result["content"], None, model)
         yield f"data: {json.dumps({'type': 'done', 'asst_msg_id': asst_msg_id, 'finish_reason': result.get('finish_reason')})}\n\n"
 
     return StreamingResponse(stream_response(), media_type="text/event-stream", headers=_SSE_HEADERS)

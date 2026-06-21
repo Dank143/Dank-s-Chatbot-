@@ -35,12 +35,18 @@ def init_db():
                 content     TEXT NOT NULL,
                 created_at  TEXT NOT NULL,
                 attachments TEXT,
+                model       TEXT,
                 FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
             );
         """)
         # Migration: add attachments column if missing.
         try:
             conn.execute("ALTER TABLE messages ADD COLUMN attachments TEXT")
+        except sqlite3.OperationalError:
+            pass
+        # Migration: add model column if missing.
+        try:
+            conn.execute("ALTER TABLE messages ADD COLUMN model TEXT")
         except sqlite3.OperationalError:
             pass
 

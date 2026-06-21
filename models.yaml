@@ -10,7 +10,7 @@ defaults:
   max_tokens: 10000
   max_history_turns: 50
   max_search_urls: 5
-  temperature: 0.0
+  temperature: 0.75
   system_prompt: ""
 
 default_model_nim: openai/gpt-oss-120b
@@ -52,7 +52,7 @@ models_nim:
   - { id: openai/gpt-oss-20b,                             name: "GPT OSS Lite",               icon: "openai.png",           stats: {consistency: 7, accuracy: 6, latency: 9, mastery: 5} }
 
   # Qwen
-  - { id: qwen/qwen3-next-80b-a3b-instruct,               name: "Qwen3 Next 80B",             icon: "qwen-color.png",       stats: {consistency: 8, accuracy: 7, latency: 8, mastery: 7} }
+  - { id: qwen/qwen3-next-80b-a3b-instruct,               name: "Qwen3 Next 80B",             icon: "qwen-color.png",       stats: {consistency: 8, accuracy: 7, latency: 8, mastery: 7}  }
 
   # StepFun
   - { id: stepfun-ai/step-3.7-flash,                      name: "Step 3.7 Flash*",            icon: "stepfun-color.png",    stats: {consistency: 9, accuracy: 8, latency: 9, mastery: 8} }

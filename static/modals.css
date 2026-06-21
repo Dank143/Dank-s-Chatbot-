@@ -833,7 +833,7 @@ body.light .model-stat-seg {
 .provider-pill {
   position: relative;
   display: inline-flex;
-  width: 220px;
+  width: 225px;
   border: none;
   border-radius: 999px;
   background: var(--bg-hover);

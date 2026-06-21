@@ -19,9 +19,6 @@ _log = logging.getLogger(__name__)
 _CACHE_TTL = 300
 
 _cfg = load_config()
-# Bigger timeout; "auto" backend handles flaky engines better than pinning.
-_ddgs = DDGS(timeout=8)
-
 # DDG warmup guard: first query ratelimits without a warm session.
 _warmup_started = False
 _warmup_done = asyncio.Event()
@@ -138,7 +135,7 @@ async def _ddg_search(
     for attempt in range(max_attempts):
         try:
             results = await asyncio.to_thread(
-                _ddgs.text, search_query, max_results=max_results,
+                lambda: list(DDGS(timeout=8).text(search_query, max_results=max_results))
             )
             mapped = [
                 {"url": r["href"], "snippet": r.get("body", ""), "title": r.get("title", "")}
@@ -165,7 +162,7 @@ async def warmup() -> None:
     global _warmup_started
     _warmup_started = True
     try:
-        await asyncio.to_thread(_ddgs.text, "wikipedia", max_results=1)
+        await asyncio.to_thread(lambda: list(DDGS(timeout=8).text("wikipedia", max_results=1)))
         _log.debug("DDG warmup ok")
     except Exception:
         _log.debug("DDG warmup failed", exc_info=True)

@@ -14,7 +14,9 @@ export function getProviderName(model) {
 
   if (typeof model === 'string') {
     modelId = model;
-    const fullModel = state.models?.find(m => m.id === model);
+    const fullModel = state.modelsNim?.find(m => m.id === model) 
+                   || state.modelsOllama?.find(m => m.id === model) 
+                   || state.models?.find(m => m.id === model);
     if (fullModel) {
       icon = fullModel.icon || '';
     }
@@ -57,7 +59,9 @@ function badgeInner(icon, label, imgPx) {
 }
 
 export function badgeHtml(modelId, size) {
-  const model = state.models.find((m) => m.id === modelId);
+  const model = state.modelsNim?.find(m => m.id === modelId) 
+             || state.modelsOllama?.find(m => m.id === modelId) 
+             || state.models?.find(m => m.id === modelId);
   const icon = model?.icon || null;
   const label = badgeLabel(model, modelId);
   const fs = Math.round(size * 0.38);

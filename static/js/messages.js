@@ -69,7 +69,10 @@ export function appendMessage(msg, streaming = false) {
     `;
   } else {
     const { think, visible } = extractThink(msg.content);
-    const modelName = state.models.find((m) => m.id === state.selectedModel)?.name || '';
+    const msgModel = msg.model || state.selectedModel;
+    const modelName = state.modelsNim?.find(m => m.id === msgModel)?.name 
+                   || state.modelsOllama?.find(m => m.id === msgModel)?.name 
+                   || state.models?.find(m => m.id === msgModel)?.name || '';
     let thinkBlockHtml = '';
     if (think && !streaming) {
       thinkBlockHtml = `
@@ -83,7 +86,7 @@ export function appendMessage(msg, streaming = false) {
     }
     wrapper.innerHTML = `
       <div class="assistant-header">
-        ${badgeHtml(state.selectedModel, 26)}
+        ${badgeHtml(msgModel, 26)}
         ${modelName ? `<span class="model-tag">${escHtml(modelName)}</span>` : ''}
       </div>
       ${thinkBlockHtml}
@@ -306,7 +309,7 @@ export async function editMessage(btn) {
 
     const attJson = (images.length || docs.length) ? JSON.stringify({ images, documents: docs }) : null;
     const userWrapper = appendMessage({ role: 'user', content: newContent, attachments: attJson });
-    const assistantWrapper = appendMessage({ role: 'assistant', content: '' }, true);
+    const assistantWrapper = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true);
 
     await streamAssistant(
       `/api/chats/${state.activeChatId}/messages`,
@@ -340,7 +343,7 @@ export async function retryMessage(btn) {
 
   beginStreaming();
 
-  const assistantWrapper = appendMessage({ role: 'assistant', content: '' }, true);
+  const assistantWrapper = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true);
 
   await streamAssistant(
     `/api/chats/${state.activeChatId}/regenerate`,

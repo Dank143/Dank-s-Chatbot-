@@ -47,7 +47,7 @@ export async function openSettings() {
       setProvider('nim');
     }
     
-    const providerNames = { 'nim': 'NVIDIA NIM', 'ollama': 'Ollama' };
+    const providerNames = { 'nim': 'NVIDIA NIM', 'ollama': 'Ollama Cloud' };
     const providerName = providerNames[state.provider] || 'NVIDIA NIM';
 
     const apiKeyLabel = $('apiKeyLabel');

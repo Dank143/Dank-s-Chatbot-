@@ -285,7 +285,7 @@ export async function sendMessage() {
     ? JSON.stringify({ images, documents })
     : null;
   const userWrapper = appendMessage({ role: 'user', content, attachments: attJson });
-  const assistantWrapper = appendMessage({ role: 'assistant', content: '' }, true);
+  const assistantWrapper = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true);
 
   await streamAssistant(
     `/api/chats/${state.activeChatId}/messages`,

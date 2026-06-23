@@ -1,5 +1,6 @@
 import { $, state, setAutoSearchDetect, setProvider } from './state.js';
 import { api } from './api.js';
+import { loadModels } from './models.js';
 
 // Show/hide the "no API key" warning banner.
 export async function refreshApiKeyWarning() {
@@ -7,8 +8,7 @@ export async function refreshApiKeyWarning() {
   if (!banner) return;
   try {
     const data = await api(`/settings?provider=${state.provider}`);
-    const isLocalOllama = state.provider === 'ollama' && ((data.base_url || '').includes('localhost') || (data.base_url || '').includes('127.0.0.1'));
-    if (data.has_key || isLocalOllama) {
+    if (data.has_key) {
       // Fade out, then hide (only if currently visible).
       if (banner.style.display !== 'none' && !banner.classList.contains('hiding')) {
         banner.classList.add('hiding');
@@ -54,7 +54,7 @@ export async function openSettings() {
     if (apiKeyLabel) {
       apiKeyLabel.textContent = `Enter ${providerName} Key`;
     }
-    keyInput.placeholder = state.provider === 'nim' ? 'nvapi-…' : 'Enter API key...';
+    keyInput.placeholder = state.provider === 'nim' ? 'Enter API key...' : 'Enter API key...';
 
     const data = await api(`/settings?provider=${state.provider}`);
     $('baseUrlInput').value = data.base_url || '';
@@ -128,26 +128,7 @@ export async function saveSettings() {
     setAutoSearchDetect($('autoSearchDetectToggle').checked);
     closeSettings();
     
-    // Refresh key state flags
-    const [settingsNim, settingsOllama] = await Promise.all([
-      api('/settings?provider=nim').catch(() => ({ has_key: false })),
-      api('/settings?provider=ollama').catch(() => ({ has_key: false }))
-    ]);
-    state.hasKeyNim = settingsNim.has_key;
-    state.hasKeyOllama = settingsOllama.has_key;
-    
-    // Auto-switch provider if current one lost its key
-    const currentHasKey = state.provider === 'nim' && state.hasKeyNim ||
-                          state.provider === 'ollama' && state.hasKeyOllama;
-    
-    if (!currentHasKey) {
-      const activeIsLocalOllama = state.provider === 'ollama' && 
-        (baseUrl.includes('localhost') || baseUrl.includes('127.0.0.1'));
-      if (!activeIsLocalOllama) {
-        if (state.hasKeyNim) setProvider('nim');
-        else if (state.hasKeyOllama) setProvider('ollama');
-      }
-    }
+    await loadModels();
 
     refreshApiKeyWarning();
   } catch (err) {

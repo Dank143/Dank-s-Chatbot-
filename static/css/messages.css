@@ -548,7 +548,7 @@ body.light .model-tag {
 }
 
 .think-content {
-  padding: 1px 0 2px 15px;
+  padding: 1px 0 2px 12px;
   margin-left: 5px;
   border-left: 2px solid var(--border);
   font-size: 13px;

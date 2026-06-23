@@ -72,6 +72,27 @@ export function badgeHtml(modelId, size) {
 }
 
 export function updateModelLabel() {
+  const hasNim = state.hasKeyNim;
+  const hasOllama = state.hasKeyOllama;
+  const noKeys = !hasNim && !hasOllama;
+
+  modelSelectorBtn.disabled = noKeys;
+
+  if (noKeys) {
+    modelSelectorLbl.textContent = 'No API keys configured';
+    const badgeEl = $('modelSelectorBadge');
+    if (badgeEl) {
+      Object.assign(badgeEl.style, {
+        background: 'transparent', color: '#ff0000',
+        width: '16px', height: '16px', fontSize: '11px',
+        display: 'flex', alignItems: 'center', justifyContent: 'center',
+        borderRadius: '50%'
+      });
+      badgeEl.innerHTML = `<svg width="16" height="16" viewBox="0 0 24 24" fill="#fff" stroke="currentColor" stroke-width="4" stroke-linecap="round"><circle cx="12" cy="12" r="10"/><line x1="4.93" y1="4.93" x2="19.07" y2="19.07"/></svg>`;
+    }
+    return;
+  }
+
   const m = state.models.find((x) => x.id === state.selectedModel);
   modelSelectorLbl.textContent = m ? m.name : state.selectedModel || 'Select model';
   const badgeEl = $('modelSelectorBadge');
@@ -79,7 +100,8 @@ export function updateModelLabel() {
     const icon = m.icon || null;
     Object.assign(badgeEl.style, {
       background: icon ? 'transparent' : '#06b6d4', color: icon ? '#333' : '#fff',
-      width: '16px', height: '16px', fontSize: '7px',
+      width: '16px', height: '16px', fontSize: '7px', display: '',
+      borderRadius: ''
     });
     badgeEl.innerHTML = badgeInner(icon, badgeLabel(m, m.id), 11);
   }
@@ -153,7 +175,7 @@ export function openDropdown() {
   // Sync provider pill UI state for the picker
   const hasKeyMap = {
     'nim': state.hasKeyNim,
-    'ollama': state.hasKeyOllama || (state.modelsOllama.length > 0)
+    'ollama': state.hasKeyOllama
   };
   const anyHasKey = Object.values(hasKeyMap).some(v => v);
 
@@ -172,7 +194,7 @@ export function closeDropdown() {
   dropdownBackdrop.style.display = 'none';
 }
 
-import { setProvider } from './state.js';
+import { setProvider, updateSendBtn } from './state.js';
 
 export async function loadModels() {
   const [nimData, ollamaData, settingsNim, settingsOllama] = await Promise.all([
@@ -191,21 +213,28 @@ export async function loadModels() {
   state.hasKeyNim = settingsNim.has_key;
   state.hasKeyOllama = settingsOllama.has_key;
 
-  // Default to the provider with an API key
+  const hasNim = state.hasKeyNim;
+  const hasOllama = state.hasKeyOllama;
+
   let initialProvider = state.provider;
-  if (!state.hasKeyNim && !state.hasKeyOllama) {
+  if (!hasNim && !hasOllama) {
     initialProvider = null;
-  } else {
-    const hasKeyMap = { 'nim': state.hasKeyNim, 'ollama': state.hasKeyOllama };
-    if (!hasKeyMap[initialProvider]) {
-      if (state.hasKeyNim) initialProvider = 'nim';
-      else if (state.hasKeyOllama) initialProvider = 'ollama';
-    }
+  } else if (hasNim && hasOllama) {
+    if (!initialProvider) initialProvider = 'nim';
+  } else if (hasNim && !hasOllama) {
+    initialProvider = 'nim';
+    state.selectedModel = state.defaultModelNim;
+  } else if (!hasNim && hasOllama) {
+    initialProvider = 'ollama';
+    state.selectedModel = state.defaultModelOllama;
   }
 
   setProvider(initialProvider);
-  state.selectedModel = state.defaultModel;
+  if (!state.selectedModel) {
+    state.selectedModel = state.defaultModel;
+  }
 
   updateModelLabel();
   renderDropdownList(state.models);
+  updateSendBtn();
 }

@@ -61,6 +61,7 @@ models_nim:
   # Zhipu
   - { id: z-ai/glm-5.1,                                   name: "GLM 5.1",                    icon: "zai.png",              stats: {consistency: 8, accuracy: 9, latency: 8, mastery: 9} }
 
+
 models_ollama:
   # Essential
   - { id: rnj-1:8b-cloud,                 name: "RNJ-1 8B",                  icon: "essentialai.png",       stats: {consistency: 7, accuracy: 6, latency: 10, mastery: 5} }

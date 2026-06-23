@@ -1,8 +1,9 @@
 import {
   state, $,
-  messagesEl, messageInput, renameBtn, chatTitleDisplay,
+  messagesEl, messageInput, renameBtn, topStarBtn, topDeleteBtn, chatTitleDisplay,
   dropdownBackdrop, modelSearch, lightbox, lightboxImg,
   autoResize, updateSendBtn, setWebSearch, setDebugMode, setProvider,
+  searchChatBtn, collapsedNewChatBtn, collapsedSearchBtn, collapsedStarBtn, collapsedRecentBtn, sidebar,
 } from './state.js';
 import { api } from './api.js';
 import { openDropdown, closeDropdown, renderDropdownList, updateModelLabel } from './models.js';
@@ -13,7 +14,7 @@ import {
 import { openSettings, closeSettings, saveSettings, updateTempSlider, setKeyStatus, refreshApiKeyWarning } from './settings.js';
 import { toggleTheme } from './theme.js';
 import {
-  sendMessage, showWelcome, openChat, loadChats, startInlineRename, toggleSidebar,
+  sendMessage, showWelcome, openChat, loadChats, startInlineRename, toggleSidebar, confirmDialog, renderSidebar,
 } from './chat.js';
 
 function stopStreaming() {
@@ -41,7 +42,36 @@ export function setupEventListeners() {
   });
   $('debugToggleBtn').addEventListener('click', () => setDebugMode(!state.debugMode));
   $('sidebarToggle').addEventListener('click', toggleSidebar);
+  $('collapsedSidebarToggle').addEventListener('click', toggleSidebar);
   $('sidebarToggleMobile').addEventListener('click', toggleSidebar);
+
+  collapsedNewChatBtn.addEventListener('click', showWelcome);
+
+  const closePopups = () => {
+    document.querySelectorAll('.sidebar-popup-wrap.active').forEach(w => w.classList.remove('active'));
+  };
+
+  collapsedStarBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wrap = collapsedStarBtn.closest('.sidebar-popup-wrap');
+    const isActive = wrap.classList.contains('active');
+    closePopups();
+    if (!isActive) wrap.classList.add('active');
+  });
+
+  collapsedRecentBtn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const wrap = collapsedRecentBtn.closest('.sidebar-popup-wrap');
+    const isActive = wrap.classList.contains('active');
+    closePopups();
+    if (!isActive) wrap.classList.add('active');
+  });
+
+  document.addEventListener('click', (e) => {
+    if (!e.target.closest('.sidebar-popup-wrap')) {
+      closePopups();
+    }
+  });
   $('themeToggleBtn').addEventListener('click', toggleTheme);
   $('settingsBtn').addEventListener('click', openSettings);
   $('apiKeyWarningLink').addEventListener('click', openSettings);
@@ -75,6 +105,28 @@ export function setupEventListeners() {
       const chat = state.chats.find((c) => c.id === state.activeChatId);
       startInlineRename(chatTitleDisplay, state.activeChatId, chat?.title || '');
     }
+  });
+
+  topStarBtn.addEventListener('click', async () => {
+    if (!state.activeChatId) return;
+    const chat = state.chats.find(c => c.id === state.activeChatId);
+    if (!chat) return;
+    await api(`/chats/${chat.id}`, { method: 'PATCH', body: { starred: !chat.starred } });
+    await loadChats();
+    // Update SVG fill locally
+    const isStarred = !chat.starred;
+    topStarBtn.querySelector('svg').setAttribute('fill', isStarred ? 'currentColor' : 'none');
+    topStarBtn.classList.toggle('starred', isStarred);
+  });
+
+  topDeleteBtn.addEventListener('click', async () => {
+    if (!state.activeChatId) return;
+    const chat = state.chats.find(c => c.id === state.activeChatId);
+    if (!chat) return;
+    if (!await confirmDialog(`Delete "${chat.title}"?`)) return;
+    await api(`/chats/${chat.id}`, { method: 'DELETE' });
+    showWelcome();
+    await loadChats();
   });
 
   $('sendBtn').addEventListener('click', () => state.streaming ? stopStreaming() : sendMessage());

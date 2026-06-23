@@ -192,8 +192,14 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
             if in_think:
                 idx = s.find(_THINK_CLOSE)
                 if idx == -1:
-                    thinking.append(s[:-(len(_THINK_CLOSE) - 1)])
-                    tag_buf = s[-(len(_THINK_CLOSE) - 1):]
+                    last_lt = s.rfind("<")
+                    if last_lt != -1 and len(s) - last_lt < len(_THINK_CLOSE):
+                        keep = len(s) - last_lt
+                        thinking.append(s[:-keep])
+                        tag_buf = s[-keep:]
+                    else:
+                        thinking.append(s)
+                        tag_buf = ""
                     break
                 thinking.append(s[:idx])
                 s = s[idx + len(_THINK_CLOSE):].lstrip("\n")
@@ -201,9 +207,14 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
             else:
                 idx = s.find(_THINK_OPEN)
                 if idx == -1:
-                    keep = len(_THINK_OPEN) - 1
-                    visible.append(s[:-keep] if len(s) > keep else "")
-                    tag_buf = s[-keep:] if len(s) >= keep else s
+                    last_lt = s.rfind("<")
+                    if last_lt != -1 and len(s) - last_lt < len(_THINK_OPEN):
+                        keep = len(s) - last_lt
+                        visible.append(s[:-keep])
+                        tag_buf = s[-keep:]
+                    else:
+                        visible.append(s)
+                        tag_buf = ""
                     break
                 visible.append(s[:idx])
                 s = s[idx + len(_THINK_OPEN):]
@@ -300,7 +311,7 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
         raw_len = sum(len(c) for c in raw_chunks)
         logger.warning("llm_stream error model=%s finish=%s raw=%d: %s", model, finish_reason, raw_len, last_exc)
         is_rate_limit = "429" in str(last_exc) or getattr(last_exc, "status_code", None) == 429
-        err_msg = "Rate limited by NIM — too many requests. Wait a moment then try again, or switch models." if is_rate_limit else str(last_exc)
+        err_msg = "Rate limited by the provider — too many requests. Wait a moment then try again, or switch models." if is_rate_limit else str(last_exc)
         yield f"data: {json.dumps({'type': 'error', 'message': err_msg})}\n\n"
         return
 

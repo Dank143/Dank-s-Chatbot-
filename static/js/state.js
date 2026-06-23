@@ -49,7 +49,19 @@ export const dropdownList     = $('dropdownList');
 export const modelSearch      = $('modelSearch');
 export const chatTitleDisplay = $('chatTitleDisplay');
 export const renameBtn        = $('renameBtn');
+export const topStarBtn       = $('topStarBtn');
+export const topDeleteBtn     = $('topDeleteBtn');
 export const sidebar          = $('sidebar');
+export const searchChatBtn    = $('searchChatBtn');
+
+export const collapsedNewChatBtn = document.getElementById('collapsedNewChatBtn');
+export const collapsedSearchBtn = document.getElementById('collapsedSearchBtn');
+export const collapsedStarBtn = document.getElementById('collapsedStarBtn');
+export const collapsedRecentBtn = document.getElementById('collapsedRecentBtn');
+export const collapsedStarList = document.getElementById('collapsedStarList');
+export const collapsedRecentList = document.getElementById('collapsedRecentList');
+export const chatListWrapper = document.querySelector('.chat-list-wrapper');
+export const newChatBtn = document.getElementById('newChatBtn');
 export const lightbox         = $('lightbox');
 export const lightboxImg      = $('lightboxImg');
 
@@ -67,7 +79,8 @@ export function autoResize() {
 }
 
 export function updateSendBtn() {
-  sendBtn.disabled = (!messageInput.value.trim() && state.pendingFiles.length === 0) || state.streaming;
+  const noKeys = !state.hasKeyNim && !state.hasKeyOllama;
+  sendBtn.disabled = noKeys || (!messageInput.value.trim() && state.pendingFiles.length === 0) || state.streaming;
 }
 
 export function setStopMode(on) {

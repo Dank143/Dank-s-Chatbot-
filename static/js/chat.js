@@ -4,7 +4,8 @@ import {
   chatTitleDisplay, renameBtn,
   starredList, recentList, starredLabel, recentsLabel, sidebar,
   escHtml, autoResize, updateSendBtn, setWebSearch, needsWebSearch,
-  clientTime, beginStreaming, endStreaming,
+  clientTime, beginStreaming, endStreaming, setProvider,
+  topStarBtn, topDeleteBtn,
 } from './state.js';
 import { api } from './api.js';
 import { clearPendingFiles } from './files.js';
@@ -145,8 +146,10 @@ export async function loadChats() {
 }
 
 export function renderSidebar() {
-  const starred = state.chats.filter((c) => c.starred);
-  const recents  = state.chats.filter((c) => !c.starred);
+  const visibleChats = state.chats;
+
+  const starred = visibleChats.filter((c) => c.starred);
+  const recents  = visibleChats.filter((c) => !c.starred);
 
   starredLabel.style.display = starred.length ? '' : 'none';
   starredList.innerHTML = '';
@@ -155,6 +158,50 @@ export function renderSidebar() {
   recentsLabel.style.display = recents.length ? '' : 'none';
   recentList.innerHTML = '';
   recents.forEach((c) => recentList.appendChild(makeChatItem(c)));
+
+  if (collapsedStarList) {
+    collapsedStarList.innerHTML = '';
+    const topStarred = starred.slice(0, 10);
+    if (topStarred.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'sidebar-popup-item';
+      empty.style.color = 'var(--text-muted)';
+      empty.style.cursor = 'default';
+      empty.style.pointerEvents = 'none';
+      empty.textContent = 'No starred chats';
+      collapsedStarList.appendChild(empty);
+    } else {
+      topStarred.forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'sidebar-popup-item';
+        item.textContent = c.title || 'New Chat';
+        item.onclick = () => openChat(c.id);
+        collapsedStarList.appendChild(item);
+      });
+    }
+  }
+
+  if (collapsedRecentList) {
+    collapsedRecentList.innerHTML = '';
+    const topRecents = recents.slice(0, 10);
+    if (topRecents.length === 0) {
+      const empty = document.createElement('div');
+      empty.className = 'sidebar-popup-item';
+      empty.style.color = 'var(--text-muted)';
+      empty.style.cursor = 'default';
+      empty.style.pointerEvents = 'none';
+      empty.textContent = 'No recent chats';
+      collapsedRecentList.appendChild(empty);
+    } else {
+      topRecents.forEach(c => {
+        const item = document.createElement('div');
+        item.className = 'sidebar-popup-item';
+        item.textContent = c.title || 'New Chat';
+        item.onclick = () => openChat(c.id);
+        collapsedRecentList.appendChild(item);
+      });
+    }
+  }
 }
 
 function makeChatItem(chat) {
@@ -165,15 +212,15 @@ function makeChatItem(chat) {
   el.innerHTML = `
     <span class="chat-item-title">${escHtml(chat.title)}</span>
     <div class="chat-item-actions">
-      <button class="chat-action-btn star-btn ${chat.starred ? 'starred' : ''}" title="${chat.starred ? 'Unstar' : 'Star'}">
-        <svg width="13" height="13" viewBox="0 0 24 24" fill="${chat.starred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
-          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
-        </svg>
-      </button>
       <button class="chat-action-btn rename-item-btn" title="Rename">
         <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/>
           <path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/>
+        </svg>
+      </button>
+      <button class="chat-action-btn star-btn ${chat.starred ? 'starred' : ''}" title="${chat.starred ? 'Unstar' : 'Star'}">
+        <svg width="13" height="13" viewBox="0 0 24 24" fill="${chat.starred ? 'currentColor' : 'none'}" stroke="currentColor" stroke-width="2">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
         </svg>
       </button>
       <button class="chat-action-btn delete-btn" title="Delete">
@@ -227,10 +274,47 @@ export async function openChat(chatId) {
   renderSidebar();
 
   const chat = await api(`/chats/${chatId}`);
-  state.selectedModel = chat.model || state.selectedModel;
+
+  const hasNim = state.hasKeyNim;
+  const hasOllama = state.hasKeyOllama;
+  const bothAvailable = hasNim && hasOllama;
+  const onlyNim = hasNim && !hasOllama;
+  const onlyOllama = !hasNim && hasOllama;
+
+  let targetModel = chat.model || state.defaultModel;
+
+  if (bothAvailable && targetModel) {
+    const isNimModel = state.modelsNim?.some(m => m.id === targetModel);
+    const isOllamaModel = state.modelsOllama?.some(m => m.id === targetModel);
+    if (isNimModel && state.provider !== 'nim') {
+      setProvider('nim');
+    } else if (isOllamaModel && state.provider !== 'ollama') {
+      setProvider('ollama');
+    }
+  } else if (onlyNim) {
+    setProvider('nim');
+    const isNimModel = state.modelsNim?.some(m => m.id === targetModel);
+    if (!isNimModel) {
+      targetModel = state.defaultModelNim;
+      api(`/chats/${chatId}`, { method: 'PATCH', body: { model: targetModel } }).catch(() => {});
+    }
+  } else if (onlyOllama) {
+    setProvider('ollama');
+    const isOllamaModel = state.modelsOllama?.some(m => m.id === targetModel);
+    if (!isOllamaModel) {
+      targetModel = state.defaultModelOllama;
+      api(`/chats/${chatId}`, { method: 'PATCH', body: { model: targetModel } }).catch(() => {});
+    }
+  }
+
+  state.selectedModel = targetModel;
   updateModelLabel();
   chatTitleDisplay.textContent = chat.title;
   renameBtn.style.display = '';
+  topStarBtn.style.display = '';
+  topDeleteBtn.style.display = '';
+  topStarBtn.querySelector('svg').setAttribute('fill', chat.starred ? 'currentColor' : 'none');
+  topStarBtn.classList.toggle('starred', chat.starred);
 
   welcomeEl.style.display = 'none';
   document.querySelector('.main').appendChild(inputAreaEl);
@@ -243,6 +327,7 @@ export async function openChat(chatId) {
 }
 
 export async function createNewChat() {
+
   const chat = await api('/chats', { method: 'POST', body: { model: state.selectedModel } });
   state.chats.unshift(chat);
   if (state.webSearch) localStorage.setItem(`webSearch_${chat.id}`, '1');
@@ -251,7 +336,22 @@ export async function createNewChat() {
 
 export function showWelcome() {
   state.activeChatId = null;
-  state.selectedModel = state.defaultModel;
+  
+  const hasNim = state.hasKeyNim;
+  const hasOllama = state.hasKeyOllama;
+  
+  if (hasNim && hasOllama) {
+    setProvider('nim');
+    state.selectedModel = state.defaultModelNim;
+  } else if (!hasNim && hasOllama) {
+    setProvider('ollama');
+    state.selectedModel = state.defaultModelOllama;
+  } else if (hasNim && !hasOllama) {
+    setProvider('nim');
+    state.selectedModel = state.defaultModelNim;
+  } else {
+    state.selectedModel = state.defaultModel;
+  }
   setWebSearch(false);
   clearPendingFiles();
   updateModelLabel();
@@ -262,6 +362,8 @@ export function showWelcome() {
   setupHomeScreen();
   chatTitleDisplay.textContent = "Dank's Chatbot";
   renameBtn.style.display = 'none';
+  topStarBtn.style.display = 'none';
+  topDeleteBtn.style.display = 'none';
   renderSidebar();
 }
 
@@ -304,9 +406,13 @@ export async function sendMessage() {
   await loadChats();
 }
 
-export function confirmDialog(message) {
+export function confirmDialog(message, okText = 'Delete', okBtnClass = 'btn-danger') {
   return new Promise((resolve) => {
     $('confirmMessage').textContent = message;
+    const okBtn = $('confirmOkBtn');
+    okBtn.textContent = okText;
+    okBtn.className = okBtnClass;
+    
     $('confirmBackdrop').style.display = 'flex';
 
     const cleanup = (result) => {
@@ -356,4 +462,9 @@ export function startInlineRename(el, chatId, currentTitle) {
   el.addEventListener('blur', () => finish(true), { once: true });
 }
 
-export function toggleSidebar() { sidebar.classList.toggle('collapsed'); }
+export function toggleSidebar() { 
+  sidebar.classList.toggle('collapsed');
+  localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed') ? '1' : '0');
+}
+
+

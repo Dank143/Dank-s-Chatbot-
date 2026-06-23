@@ -20,6 +20,7 @@ A self-hosted AI chat interface powered by [NVIDIA NIM](https://build.nvidia.com
 - **Streaming responses** with real-time token rendering and a **stop button** to cancel generation at any time
 - **Persistent chat history** — all conversations stored in a local SQLite database
 - **Starred / recent chats** in a collapsible sidebar; auto-titles chats from the first message
+- **Chat Search & Management** — search through all past conversations, bulk select, bulk star/unstar, and bulk delete chats via a dedicated modal
 - **Markdown + math** — rendered via marked.js, highlight.js, and KaTeX (LaTeX math blocks)
 - **Edit & retry** — inline-edit any user message; retry the last assistant response
 - **Copy & download** — copy button on messages and code blocks; download button on code blocks
@@ -59,16 +60,20 @@ Chatbot/
 │   └── settings.py      # Models, settings, warmup, and key-verify endpoints
 └── static/
     ├── index.html
-    ├── base.css          # CSS variables and resets
-    ├── layout.css        # Sidebar, main area, topbar layout
-    ├── input.css         # Input bar, attachments, send button
-    ├── messages.css      # Message bubbles, code blocks, streaming cursor
-    ├── modals.css        # Settings, model picker, confirm dialogs
+    ├── css/              # Stylesheets
+    │   ├── base.css      # CSS variables and resets
+    │   ├── layout.css    # Sidebar, main area, topbar layout
+    │   ├── input.css     # Input bar, attachments, send button
+    │   ├── messages.css  # Message bubbles, code blocks, streaming cursor
+    │   ├── components.css # Buttons, pill toggles, generic UI elements
+    │   ├── settings.css  # Settings modal, sliders, debug panels
+    │   └── modals.css    # Model picker, chat search, confirm dialogs
     └── js/               # ES modules
         ├── app.js        # Entry point — imports and global window bindings
         ├── state.js      # Shared state, DOM refs, utility helpers
         ├── api.js        # Fetch wrapper
         ├── chat.js       # Chat management, sidebar, sendMessage
+        ├── search.js     # Chat search modal and bulk chat management
         ├── messages.js   # Message rendering, edit/retry, truncation notices
         ├── stream.js     # SSE stream parsing and token rendering
         ├── events.js     # All DOM event listeners

@@ -17,7 +17,7 @@ except ImportError:
 _log = logging.getLogger(__name__)
 
 _JINA_BASE = "https://r.jina.ai/"
-_MAX_CHARS = 15000
+_MAX_CHARS = 20000
 _MIN_CHARS = 1500
 # Min snippet length to count as usable fallback context.
 _MIN_SNIPPET = 80

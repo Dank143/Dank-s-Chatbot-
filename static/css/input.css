@@ -298,3 +298,5 @@ textarea#messageInput::-webkit-scrollbar-thumb { background: var(--border-input)
 
 /* Bigger textarea on welcome screen */
 .welcome textarea#messageInput { min-height: 50px; }
+
+.model-selector-btn:disabled { opacity: 0.5; cursor: not-allowed; }

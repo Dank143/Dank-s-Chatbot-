@@ -4,6 +4,7 @@ import { loadModels, updateModelLabel } from './models.js';
 import { loadChats, showWelcome, openChat } from './chat.js';
 import { setupEventListeners } from './events.js';
 import { copyCode, copyMessage, editMessage, retryMessage, downloadCode } from './messages.js';
+import { ChatSearchModal } from './search.js';
 import { state } from './state.js';
 
 // Expose handlers for inline onclick= attributes
@@ -19,10 +20,20 @@ async function init() {
   const [, , bootRes] = await Promise.all([loadModels(), loadChats(), fetch('/api/boot-id').then(r => r.json())]);
   setupEventListeners();
 
+  const chatSearch = new ChatSearchModal();
+  chatSearch.init();
+
   const storedBootId = sessionStorage.getItem('boot_id');
   sessionStorage.setItem('boot_id', bootRes.id);
 
   const isBrowserRefresh = storedBootId === bootRes.id;
+  if (!isBrowserRefresh) {
+    localStorage.removeItem('sidebarCollapsed');
+    document.getElementById('sidebar').classList.remove('collapsed');
+  } else if (localStorage.getItem('sidebarCollapsed') === '1') {
+    document.getElementById('sidebar').classList.add('collapsed');
+  }
+
   if (isBrowserRefresh) {
     const recent = state.chats.slice().sort((a, b) => b.updated_at.localeCompare(a.updated_at))[0];
     if (recent) {

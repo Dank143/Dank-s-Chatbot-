@@ -226,7 +226,10 @@ export async function editMessage(btn) {
   if (state.streaming) return;
   const wrapper = btn.closest('.message-wrapper');
   const msgId = wrapper.dataset.msgId;
-  if (!msgId) return;
+  if (!msgId) {
+    await (await import('./chat.js')).openChat(state.activeChatId);
+    return;
+  }
 
   const bubble = wrapper.querySelector('.bubble');
   const originalHTML = wrapper.innerHTML;
@@ -333,7 +336,10 @@ export async function retryMessage(btn) {
   if (state.streaming) return;
   const wrapper = btn.closest('.message-wrapper');
   const msgId = wrapper.dataset.msgId;
-  if (!msgId) return;
+  if (!msgId) {
+    await (await import('./chat.js')).openChat(state.activeChatId);
+    return;
+  }
 
   await deleteFrom(wrapper, msgId);
 

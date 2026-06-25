@@ -7,7 +7,7 @@ from datetime import datetime
 
 from openai import AsyncOpenAI
 from ddgs import DDGS
-from config import load_config, provider_api
+from config import load_config, provider_api, provider_default_model
 
 from urllib.parse import urlparse, parse_qs
 
@@ -22,7 +22,8 @@ _cfg = load_config()
 # DDG warmup guard: first query ratelimits without a warm session.
 _warmup_started = False
 _warmup_done = asyncio.Event()
-_REWRITE_MODEL = "qwen/qwen3-next-80b-a3b-instruct"
+_REWRITE_MODEL_NIM = "qwen/qwen3-next-80b-a3b-instruct"
+_REWRITE_MODEL_OLLAMA = "gemma4:31b-cloud"
 _MAX_URLS = _cfg.get("defaults", {}).get("max_search_urls", 5)
 
 _rewriter_cache: dict[tuple, AsyncOpenAI] = {}
@@ -244,6 +245,14 @@ _REWRITE_SYSTEM = (
 )
 
 
+def _get_ollama_client() -> AsyncOpenAI:
+    api = provider_api("ollama")
+    key = (api["key"], api["base_url"])
+    if key not in _rewriter_cache:
+        _rewriter_cache[key] = AsyncOpenAI(api_key=key[0], base_url=key[1])
+    return _rewriter_cache[key]
+
+
 async def _rewrite_query(raw: str, context: str = "") -> str:
     """LLM-rewrite to standalone search query."""
     if context:
@@ -252,23 +261,40 @@ async def _rewrite_query(raw: str, context: str = "") -> str:
         )
     else:
         user_content = raw
-    try:
-        resp = await asyncio.wait_for(
-            _get_rewriter().chat.completions.create(
-                model=_REWRITE_MODEL,
-                max_tokens=30,
-                temperature=0.0,
-                messages=[
-                    {"role": "system", "content": _REWRITE_SYSTEM},
-                    {"role": "user", "content": user_content},
-                ],
-            ),
-            timeout=7.0,
+
+    async def _fetch(client, model) -> str:
+        resp = await client.chat.completions.create(
+            model=model,
+            max_tokens=30,
+            temperature=0.0,
+            messages=[
+                {"role": "system", "content": _REWRITE_SYSTEM},
+                {"role": "user", "content": user_content},
+            ],
         )
-        return (resp.choices[0].message.content or "").strip() or raw
+        return (resp.choices[0].message.content or "").strip()
+
+    nim_task = asyncio.create_task(_fetch(_get_rewriter(), _REWRITE_MODEL_NIM))
+    
+    ollama_model = _REWRITE_MODEL_OLLAMA
+    ollama_task = asyncio.create_task(_fetch(_get_ollama_client(), ollama_model)) if ollama_model else None
+
+    try:
+        res = await asyncio.wait_for(asyncio.shield(nim_task), timeout=10.0)
+        if res:
+            return res
     except Exception:
-        _log.warning("Query rewrite failed, using original", exc_info=True)
-        return raw
+        _log.warning("NIM query rewrite failed/timed out, checking Ollama", exc_info=True)
+
+    if ollama_task:
+        try:
+            res = await asyncio.wait_for(asyncio.shield(ollama_task), timeout=2.0)
+            if res:
+                return res
+        except Exception:
+            _log.warning("Ollama query rewrite failed/timed out", exc_info=True)
+
+    return raw
 
 
 _EMBED_MODEL = "nvidia/nv-embedqa-e5-v5"

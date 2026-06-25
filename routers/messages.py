@@ -9,7 +9,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 
-from config import load_config, provider_api, provider_for_model, _PROVIDERS
+from config import load_config, provider_api, provider_for_model, provider_default_model, _PROVIDERS
 from database import get_db, now_iso
 from search import fetch_web_context, inject_web_context
 from llm import build_messages, is_asking_about_creator, llm_stream, reasoning_controls
@@ -26,7 +26,8 @@ _DANG_VI_RE = re.compile(r'[Đđ]' + _SEP + r'[Ăă]' + _SEP + r'n' + _SEP + r'g
 _DANG_EN_RE = re.compile(r'(?<![a-zA-Z])d' + _SEP + r'a' + _SEP + r'n' + _SEP + r'g(?![a-zA-Z])', re.IGNORECASE)
 _client_cache: dict[tuple, AsyncOpenAI] = {}
 
-_TITLE_MODEL = "qwen/qwen3-next-80b-a3b-instruct"
+_TITLE_MODEL_NIM = "qwen/qwen3-next-80b-a3b-instruct"
+_TITLE_MODEL_OLLAMA = "gemma4:31b-cloud"
 
 
 def _get_client(api_key: str, base_url: str) -> AsyncOpenAI:
@@ -95,12 +96,16 @@ def _build_request(history, today: str, model: str):
 async def _generate_title(user_content: str) -> str:
     """LLM-generate a 2-8 word chat title; falls back to truncated text."""
     fallback = _fallback_title(user_content)
-    try:
-        resp = await _nim_client().chat.completions.create(
-            model=_TITLE_MODEL,
+    system = "Output only a short conversation title: less than 10 words, no punctuation, no quotes, no explanation, no preamble, capitalize ONLY the first letter and proper nouns."
+    user = user_content[:500]
+
+    async def _fetch(provider: str, model: str) -> str:
+        client = _client_for_provider(provider)
+        resp = await client.chat.completions.create(
+            model=model,
             messages=[
-                {"role": "system", "content": "Output only a short conversation title: 3-6 words, no punctuation at the end, no quotes, no explanation, no preamble."},
-                {"role": "user", "content": user_content[:500]},
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
             ],
             max_tokens=50,
             temperature=0.0,
@@ -113,11 +118,28 @@ async def _generate_title(user_content: str) -> str:
         raw = raw.strip("\"'")
         word_count = len(raw.split())
         if not raw or not (2 <= word_count <= 8):
-            return fallback
+            raise ValueError("Invalid title format")
         return raw
+
+    nim_task = asyncio.create_task(_fetch("nim", _TITLE_MODEL_NIM))
+    
+    ollama_model = _TITLE_MODEL_OLLAMA
+    ollama_task = asyncio.create_task(_fetch("ollama", ollama_model)) if ollama_model else None
+
+    try:
+        res = await asyncio.wait_for(asyncio.shield(nim_task), timeout=10.0)
+        return res
     except Exception as e:
-        logger.warning("Title generation failed: %s", e)
-        return fallback
+        logger.warning("NIM Title generation failed/timed out: %s", e)
+
+    if ollama_task:
+        try:
+            res = await asyncio.wait_for(asyncio.shield(ollama_task), timeout=2.0)
+            return res
+        except Exception as e:
+            logger.warning("Ollama Title generation failed/timed out: %s", e)
+
+    return fallback
 
 
 @router.post("/{chat_id}/messages")

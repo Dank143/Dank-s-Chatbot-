@@ -238,13 +238,6 @@ function makeChatItem(chat) {
     openChat(chat.id);
   });
 
-  el.addEventListener('mouseenter', () => {
-    if (state.streaming && chat.id !== state.activeChatId) {
-      state.abortController?.abort();
-      endStreaming();
-    }
-  });
-
   el.querySelector('.star-btn').addEventListener('click', async (e) => {
     e.stopPropagation();
     await api(`/chats/${chat.id}`, { method: 'PATCH', body: { starred: !chat.starred } });
@@ -268,6 +261,10 @@ function makeChatItem(chat) {
 }
 
 export async function openChat(chatId) {
+  if (state.streaming) {
+    state.abortController?.abort();
+    endStreaming();
+  }
   state.activeChatId = chatId;
   setWebSearch(localStorage.getItem(`webSearch_${chatId}`) === '1');
   clearPendingFiles();

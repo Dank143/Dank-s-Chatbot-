@@ -10,7 +10,7 @@ defaults:
   max_tokens: 10000
   max_history_turns: 50
   max_search_urls: 5
-  temperature: 0.75
+  temperature: 0.5
   system_prompt: ""
 
 default_model_nim: openai/gpt-oss-120b
@@ -18,6 +18,9 @@ default_model_ollama: gpt-oss:120b-cloud
 
 # There are other models, yet they suffer with major inconsistancies. If you don't mind gambling on their speed, include them here.
 models_nim: 
+  # Bytedance
+  - { id: bytedance/seed-oss-36b-instruct,                name: "Seed OSS 36B Instruct",      icon: "bytedance-color.png",  stats: {consistency: 7, accuracy: 8, latency: 8, mastery: 6} }
+
   # DeepSeek
   - { id: deepseek-ai/deepseek-v4-pro,                    name: "DeepSeek V4 Pro",            icon: "deepseek-color.png",   stats: {consistency: 5, accuracy: 10, latency: 6, mastery: 9} }
   - { id: deepseek-ai/deepseek-v4-flash,                  name: "DeepSeek V4 Flash",          icon: "deepseek-color.png",   stats: {consistency: 6, accuracy: 9, latency: 8, mastery: 8} }
@@ -35,36 +38,40 @@ models_nim:
   - { id: minimaxai/minimax-m2.7,                         name: "MiniMax M2.7",               icon: "minimax-color.png",    stats: {consistency: 8, accuracy: 7, latency: 8, mastery: 7} }
 
   # Mistral
-  - { id: mistralai/mistral-large-3-675b-instruct-2512,   name: "Mistral Large 3 675B*",      icon: "mistral-color.png",    stats: {consistency: 5, accuracy: 8, latency: 9, mastery: 9} }
+  - { id: mistralai/mistral-large-3-675b-instruct-2512,   name: "Mistral Large 3 675B*",      icon: "mistral-color.png",    stats: {consistency: 5, accuracy: 8, latency: 9, mastery: 9}  }
+  - { id: mistralai/mistral-medium-3.5-128b,              name: "Mistral Medium 128B*",       icon: "mistral-color.png",    stats: {consistency: 6, accuracy: 8, latency: 8, mastery: 8}  }
   - { id: mistralai/mistral-small-4-119b-2603,            name: "Mistral Small 4 119B*",      icon: "mistral-color.png",    stats: {consistency: 8, accuracy: 7, latency: 10, mastery: 8} }
-  - { id: mistralai/ministral-14b-instruct-2512,          name: "Ministral 14B Instruct*",    icon: "mistral-color.png",    stats: {consistency: 5, accuracy: 6, latency: 9, mastery: 5} }
+  - { id: mistralai/mistral-nemotron,                     name: "Mistral Nemotron",           icon: "mistral-color.png",    stats: {consistency: 4, accuracy: 6, latency: 9, mastery: 4}  }
+  - { id: mistralai/ministral-14b-instruct-2512,          name: "Ministral 14B Instruct*",    icon: "mistral-color.png",    stats: {consistency: 5, accuracy: 6, latency: 9, mastery: 5}  }
 
   # Moonshot
   - { id: moonshotai/kimi-k2.6,                           name: "Kimi K2.6*",                 icon: "moonshot.png",         stats: {consistency: 8, accuracy: 8, latency: 9, mastery: 10} }
 
   # NVIDIA
-  - { id: nvidia/nemotron-3-super-120b-a12b,              name: "Nemotron 3 Super",           icon: "nvidia-color.png",     stats: {consistency: 6, accuracy: 7, latency: 6, mastery: 7} }
-  - { id: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,  name: "Nemotron 3 Nano*",           icon: "nvidia-color.png",     stats: {consistency: 9, accuracy: 6, latency: 9, mastery: 6} }
-  - { id: nvidia/nemotron-nano-12b-v2-vl,                 name: "Nemotron Nano 12B*",         icon: "nvidia-color.png",     stats: {consistency: 7, accuracy: 5, latency: 9, mastery: 5} }
+  - { id: nvidia/nemotron-nano-12b-v2-vl,                 name: "Nemotron Nano 12B*",         icon: "nvidia-color.png",     stats: {consistency: 7, accuracy: 5, latency: 9, mastery: 5}  }
+  - { id: nvidia/nemotron-3-super-120b-a12b,              name: "Nemotron 3 Super",           icon: "nvidia-color.png",     stats: {consistency: 6, accuracy: 7, latency: 6, mastery: 7}  }
+  - { id: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,  name: "Nemotron 3 Nano*",           icon: "nvidia-color.png",     stats: {consistency: 9, accuracy: 6, latency: 9, mastery: 6}  }
 
   # OpenAI
   - { id: openai/gpt-oss-120b,                            name: "GPT OSS Max",                icon: "openai.png",           stats: {consistency: 8, accuracy: 8, latency: 10, mastery: 7} }
   - { id: openai/gpt-oss-20b,                             name: "GPT OSS Lite",               icon: "openai.png",           stats: {consistency: 7, accuracy: 6, latency: 9, mastery: 5} }
 
   # Qwen
-  - { id: qwen/qwen3-next-80b-a3b-instruct,               name: "Qwen3 Next 80B",             icon: "qwen-color.png",       stats: {consistency: 8, accuracy: 7, latency: 8, mastery: 7}  }
+  - { id: qwen/qwen3.5-397b-a17b,                         name: "Qwen 3.5 397B",              icon: "qwen-color.png",       stats: {consistency: 5, accuracy: 8, latency: 6, mastery: 7} }
+  - { id: qwen/qwen3.5-122b-a10b,                         name: "Qwen 3.5 122B",              icon: "qwen-color.png",       stats: {consistency: 8, accuracy: 7, latency: 8, mastery: 7} }
+  - { id: qwen/qwen3-next-80b-a3b-instruct,               name: "Qwen3 Next 80B",             icon: "qwen-color.png",       stats: {consistency: 8, accuracy: 7, latency: 8, mastery: 7} }
 
   # StepFun
   - { id: stepfun-ai/step-3.7-flash,                      name: "Step 3.7 Flash*",            icon: "stepfun-color.png",    stats: {consistency: 9, accuracy: 8, latency: 9, mastery: 8} }
   - { id: stepfun-ai/step-3.5-flash,                      name: "Step 3.5 Flash",             icon: "stepfun-color.png",    stats: {consistency: 7, accuracy: 8, latency: 8, mastery: 7} }
 
-  # Zhipu
-  - { id: z-ai/glm-5.1,                                   name: "GLM 5.1",                    icon: "zai.png",              stats: {consistency: 8, accuracy: 9, latency: 8, mastery: 9} }
+  # # Zhipu
+  # - { id: z-ai/glm-5.1,                                   name: "GLM 5.1",                    icon: "zai.png",              stats: {consistency: 8, accuracy: 9, latency: 8, mastery: 9} } # Very slow
 
 
 models_ollama:
-  # Essential
-  - { id: rnj-1:8b-cloud,                 name: "RNJ-1 8B",                  icon: "essentialai.png",       stats: {consistency: 7, accuracy: 6, latency: 10, mastery: 5} }
+  # # Essential
+  # - { id: rnj-1:8b-cloud,                 name: "RNJ-1 8B",                  icon: "essentialai.png",       stats: {consistency: 7, accuracy: 6, latency: 10, mastery: 5} } # Error 500 atm
 
   # Google
   - { id: gemma4:31b-cloud,               name: "Gemma 4 31B*",              icon: "google-color.png",      stats: {consistency: 8, accuracy: 8, latency: 8, mastery: 7} }
@@ -85,7 +92,8 @@ models_ollama:
   - { id: nemotron-3-nano:30b-cloud,      name: "Nemotron 3 Nano*",          icon: "nvidia-color.png",      stats: {consistency: 9, accuracy: 6, latency: 9, mastery: 6} }
 
   # OpenAI
-  - { id: gpt-oss:120b-cloud,             name: "GPT OSS 120B",              icon: "openai.png",            stats: {consistency: 8, accuracy: 8, latency: 10, mastery: 7} }
+  - { id: gpt-oss:120b-cloud,             name: "GPT OSS Max",               icon: "openai.png",            stats: {consistency: 8, accuracy: 8, latency: 10, mastery: 7} }
+  - { id: gpt-oss:20b-cloud,              name: "GPT OSS Lite",              icon: "openai.png",            stats: {consistency: 7, accuracy: 6, latency: 9, mastery: 5} }
 
   # Qwen
   - { id: qwen3-coder:480b-cloud,         name: "Qwen3 Coder 480B",          icon: "qwen-color.png",        stats: {consistency: 5, accuracy: 9, latency: 5, mastery: 9} }

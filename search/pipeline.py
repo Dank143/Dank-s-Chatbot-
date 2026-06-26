@@ -7,7 +7,8 @@ from datetime import datetime
 
 from openai import AsyncOpenAI
 from ddgs import DDGS
-from config import load_config, provider_api, provider_default_model
+from config import load_config, provider_api
+from llm import race_models, get_client
 
 from urllib.parse import urlparse, parse_qs
 
@@ -22,20 +23,7 @@ _cfg = load_config()
 # DDG warmup guard: first query ratelimits without a warm session.
 _warmup_started = False
 _warmup_done = asyncio.Event()
-_REWRITE_MODEL_NIM = "qwen/qwen3-next-80b-a3b-instruct"
-_REWRITE_MODEL_OLLAMA = "gemma4:31b-cloud"
 _MAX_URLS = _cfg.get("defaults", {}).get("max_search_urls", 5)
-
-_rewriter_cache: dict[tuple, AsyncOpenAI] = {}
-
-
-def _get_rewriter() -> AsyncOpenAI:
-    """Rewriter client — always uses NIM (rewrite/embed models are NIM-hosted)."""
-    api = provider_api("nim")
-    key = (api["key"], api["base_url"])
-    if key not in _rewriter_cache:
-        _rewriter_cache[key] = AsyncOpenAI(api_key=key[0], base_url=key[1])
-    return _rewriter_cache[key]
 
 _cache: dict[tuple, tuple] = {}
 
@@ -245,14 +233,6 @@ _REWRITE_SYSTEM = (
 )
 
 
-def _get_ollama_client() -> AsyncOpenAI:
-    api = provider_api("ollama")
-    key = (api["key"], api["base_url"])
-    if key not in _rewriter_cache:
-        _rewriter_cache[key] = AsyncOpenAI(api_key=key[0], base_url=key[1])
-    return _rewriter_cache[key]
-
-
 async def _rewrite_query(raw: str, context: str = "") -> str:
     """LLM-rewrite to standalone search query."""
     if context:
@@ -262,43 +242,41 @@ async def _rewrite_query(raw: str, context: str = "") -> str:
     else:
         user_content = raw
 
-    async def _fetch(client, model) -> str:
-        resp = await client.chat.completions.create(
-            model=model,
-            max_tokens=30,
-            temperature=0.0,
-            messages=[
-                {"role": "system", "content": _REWRITE_SYSTEM},
-                {"role": "user", "content": user_content},
-            ],
-        )
-        return (resp.choices[0].message.content or "").strip()
-
-    nim_task = asyncio.create_task(_fetch(_get_rewriter(), _REWRITE_MODEL_NIM))
-    
-    ollama_model = _REWRITE_MODEL_OLLAMA
-    ollama_task = asyncio.create_task(_fetch(_get_ollama_client(), ollama_model)) if ollama_model else None
-
-    try:
-        res = await asyncio.wait_for(asyncio.shield(nim_task), timeout=10.0)
-        if res:
-            return res
-    except Exception:
-        _log.warning("NIM query rewrite failed/timed out, checking Ollama", exc_info=True)
-
-    if ollama_task:
+    async def _fetch(client, model) -> str | None:
         try:
-            res = await asyncio.wait_for(asyncio.shield(ollama_task), timeout=2.0)
-            if res:
-                return res
-        except Exception:
-            _log.warning("Ollama query rewrite failed/timed out", exc_info=True)
+            _log.info("Query rewrite started using model %s", model)
+            resp = await client.chat.completions.create(
+                model=model,
+                max_tokens=30,
+                temperature=0.0,
+                messages=[
+                    {"role": "system", "content": _REWRITE_SYSTEM},
+                    {"role": "user", "content": user_content},
+                ],
+            )
+            raw = (resp.choices[0].message.content or "").strip()
+            _log.info("[Background] %s query rewrite completed: %r", model, raw)
+            return raw
+        except Exception as e:
+            _log.warning("Query rewrite inner error for %s: %s", model, e)
+            return None
 
-    return raw
+    cfg = load_config()
+    nim_model = cfg.get("rewrite_model_nim")
+    ollama_model = cfg.get("rewrite_model_ollama")
+    
+    nim_task = asyncio.create_task(_fetch(get_client("nim"), nim_model)) if nim_model else None
+    ollama_task = asyncio.create_task(_fetch(get_client("ollama"), ollama_model)) if ollama_model else None
+
+    res = await race_models(
+        ollama_task, nim_task, 
+        timeout=5.0, logger=_log, task_name="query rewrite",
+        primary_name="Ollama", backup_name="NIM"
+    )
+    return res if res else raw
 
 
-_EMBED_MODEL = "nvidia/nv-embedqa-e5-v5"
-_EMBED_TIMEOUT = 6.0
+_EMBED_TIMEOUT = 6.9
 
 
 async def _embed(texts: list[str], input_type: str) -> "list[list[float]] | None":
@@ -306,9 +284,13 @@ async def _embed(texts: list[str], input_type: str) -> "list[list[float]] | None
     if not texts:
         return []
     try:
+        cfg = load_config()
+        embed_model = cfg.get("embed_model_nim")
+        if not embed_model:
+            return None
         resp = await asyncio.wait_for(
-            _get_rewriter().embeddings.create(
-                model=_EMBED_MODEL,
+            get_client("nim").embeddings.create(
+                model=embed_model,
                 input=texts,
                 extra_body={"input_type": input_type, "truncate": "END"},
             ),

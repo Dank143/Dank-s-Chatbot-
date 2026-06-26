@@ -1,4 +1,4 @@
-import { $, state, setAutoSearchDetect, setProvider } from './state.js';
+import { $, state, setAutoSearchDetect, setAutoScroll, setProvider } from './state.js';
 import { api } from './api.js';
 import { loadModels } from './models.js';
 
@@ -78,6 +78,7 @@ export async function openSettings() {
     $('tempSlider').value = temp;
     updateTempSlider(temp);
     $('autoSearchDetectToggle').checked = state.autoSearchDetect;
+    $('autoScrollToggle').checked = state.autoScroll;
   } catch {
     setKeyStatus('Could not load current settings.', 'warn');
   }
@@ -117,7 +118,12 @@ export async function saveSettings() {
   if (key !== null) body.key = key;
   if (baseUrl) body.base_url = baseUrl;
   if (!isNaN(temperature)) body.temperature = temperature;
-  if (Object.keys(body).length <= 1) { setAutoSearchDetect($('autoSearchDetectToggle').checked); closeSettings(); return; }
+  if (Object.keys(body).length <= 1) { 
+    setAutoSearchDetect($('autoSearchDetectToggle').checked); 
+    setAutoScroll($('autoScrollToggle').checked);
+    closeSettings(); 
+    return; 
+  }
 
   const saveBtn = $('settingsSaveBtn');
   saveBtn.textContent = 'Saving…';
@@ -126,6 +132,7 @@ export async function saveSettings() {
   try {
     await api('/settings', { method: 'PATCH', body });
     setAutoSearchDetect($('autoSearchDetectToggle').checked);
+    setAutoScroll($('autoScrollToggle').checked);
     closeSettings();
     
     await loadModels();

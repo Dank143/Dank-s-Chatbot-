@@ -28,9 +28,9 @@ A self-hosted AI chat interface powered by [NVIDIA NIM](https://build.nvidia.com
 - **Document attachments** — attach PDF, DOCX, PPTX, XLSX, or plain text files; text is extracted and sent as context (up to 120 000 chars)
 - **Web search** — globe toggle enables live search via DuckDuckGo + Jina Reader + MediaWiki API; semantic reranking via NIM embeddings; auto-triggers on search-intent phrases; per-chat state in `localStorage`
 - **Dark / light theme** toggle, persisted in `localStorage`
-- **Settings modal** — configure API key, base URL, and generation temperature per provider; key verification built in
+- **Settings modal** — configure API key, base URL, generation temperature, and UI behaviors (like auto-scrolling); key verification built in
 - **Voice input** — microphone button for hands-free message dictation via the Web Speech API
-- **Config-driven models** — add/remove models and their icons entirely in `models.yaml`, no code changes needed
+- **Config-driven architecture** — add/remove models, background tasks (titles, query rewrites, embeddings), and API config entirely in `models.yaml`, no code changes needed
 - **Model warmup** — keeps the selected NIM model warm to avoid cold-start delays
 - **Auto-opens** the most recently updated chat on page load
 
@@ -168,6 +168,15 @@ defaults:
 default_model_nim: openai/gpt-oss-120b
 default_model_ollama: gpt-oss:120b-cloud
 
+title_model_nim: meta/llama-3.3-70b-instruct
+title_model_ollama: gemma3:27b-cloud
+
+rewrite_model_nim: qwen/qwen3-next-80b-a3b-instruct
+rewrite_model_ollama: qwen2.5:32b-cloud
+
+embed_model_nim: nvidia/nv-embedqa-e5-v5
+embed_model_ollama: nomic-embed-text:cloud
+
 models_nim:
   - id: meta/llama-3.3-70b-instruct
     name: "Llama 3.3 70B"
@@ -205,11 +214,11 @@ Click the globe icon (🌐) in the input toolbar to toggle web search for the cu
 Web search also **auto-triggers** when the message contains high-confidence search-intent patterns — phrases like "latest news on", "what's happening with", "update on", "what happened to", "who won", "current score", etc. This can be enable in settings.
 
 When triggered, the backend:
-1. **Rewrites** the user message into a standalone search query using a fast LLM (`qwen/qwen3-next-80b-a3b-instruct` via NIM) with conversation context for pronoun resolution
+1. **Rewrites** the user message into a standalone search query using a fast LLM (races Ollama and NIM via `models.yaml` config) with conversation context for pronoun resolution
 2. **Routes** to the best source based on intent: YouTube (media), Reddit (opinions), Cambridge Dictionary (linguistics), documentation, or auto-discovered entity wikis (Wikipedia, Fandom, game wikis)
 3. **Queries DuckDuckGo** with the rewritten query + site filter; probes for wiki hosts at runtime
 4. **Fetches page content** by racing three fetchers per URL (first success wins): MediaWiki API, [Jina Reader](https://jina.ai/reader/), or Trafilatura; per-host caching avoids re-probing failed fetchers
-5. **Reranks** results using NIM embeddings (cosine similarity); falls back to keyword priority heuristic
+5. **Reranks** results using embeddings (races Ollama and NIM); falls back to keyword priority heuristic
 6. **Injects** retrieved context + citation instructions into the conversation before calling the model
 
 Cloudflare-blocked pages (e.g. Reddit) use Patchright (a stealth fork of Playwright) as a last resort. Social/video domains are skipped (YouTube results return links only). A TTL cache (5 min) prevents duplicate fetches.

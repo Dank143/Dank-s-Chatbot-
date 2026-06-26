@@ -27,6 +27,7 @@ export const state = {
     'who won', 'who is winning', "today's", 'this morning', 'this afternoon', 'this evening',
   ],
   autoSearchDetect: localStorage.getItem('autoSearchDetect') !== '0',
+  autoScroll: localStorage.getItem('autoScroll') !== '0',
   hasKeyNim: false,
   hasKeyOllama: false,
 };
@@ -79,8 +80,12 @@ export function autoResize() {
 }
 
 export function updateSendBtn() {
+  if (state.streaming) {
+    sendBtn.disabled = false;
+    return;
+  }
   const noKeys = !state.hasKeyNim && !state.hasKeyOllama;
-  sendBtn.disabled = noKeys || (!messageInput.value.trim() && state.pendingFiles.length === 0) || state.streaming;
+  sendBtn.disabled = noKeys || (!messageInput.value.trim() && state.pendingFiles.length === 0);
 }
 
 export function setStopMode(on) {
@@ -102,6 +107,11 @@ export function setWebSearch(on) {
 export function setAutoSearchDetect(on) {
   state.autoSearchDetect = on;
   localStorage.setItem('autoSearchDetect', on ? '1' : '0');
+}
+
+export function setAutoScroll(on) {
+  state.autoScroll = on;
+  localStorage.setItem('autoScroll', on ? '1' : '0');
 }
 
 export function setDebugMode(on) {

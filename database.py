@@ -1,3 +1,4 @@
+import asyncio
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -53,3 +54,24 @@ def init_db():
 
 def now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
+
+
+async def db_execute(query: str, params: tuple | list = (), fetch: str = "none"):
+    """Execute a query and fetch 'all', 'one', or 'none'. Returns dicts."""
+    def _work():
+        with get_db() as conn:
+            res = conn.execute(query, params)
+            if fetch == "all": return [dict(r) for r in res.fetchall()]
+            if fetch == "one":
+                row = res.fetchone()
+                return dict(row) if row else None
+            return None
+    return await asyncio.to_thread(_work)
+
+
+async def run_db_task(func):
+    """Run a custom function in a background thread, passing it a managed DB connection."""
+    def _work():
+        with get_db() as conn:
+            return func(conn)
+    return await asyncio.to_thread(_work)

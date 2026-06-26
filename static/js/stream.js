@@ -73,7 +73,7 @@ export async function streamAssistant(endpoint, body, userWrapper, assistantWrap
     const streamBubble = assistantWrapper.querySelector('.bubble');
     let renderScheduled = false;
     let lastRender = 0;
-    const RENDER_INTERVAL = 100;  // ms between re-parses; final full render at 'done'
+    const RENDER_INTERVAL = 200;  // ms between re-parses; final full render at 'done'
 
     while (!finished) {
       const { done: streamDone, value } = await Promise.race([reader.read(), abortPromise]);
@@ -138,20 +138,22 @@ export async function streamAssistant(endpoint, body, userWrapper, assistantWrap
             block.dataset.think = thinkRaw;
             
             // Throttle markdown re-parsing for the thinking block.
-            const now = performance.now();
-            if (!renderScheduled && now - lastRender >= RENDER_INTERVAL) {
+            if (!renderScheduled) {
               renderScheduled = true;
-              lastRender = now;
-              requestAnimationFrame(() => {
-                renderScheduled = false;
-                if (!streamFinished) {
-                  const activeBlock = assistantWrapper.querySelector('.think-block.streaming .think-content');
-                  if (activeBlock) {
-                    activeBlock.innerHTML = renderMarkdown(thinkRaw);
-                    scrollToBottom();
+              const delay = Math.max(0, RENDER_INTERVAL - (performance.now() - lastRender));
+              setTimeout(() => {
+                requestAnimationFrame(() => {
+                  renderScheduled = false;
+                  lastRender = performance.now();
+                  if (!streamFinished) {
+                    const activeBlock = assistantWrapper.querySelector('.think-block.streaming .think-content');
+                    if (activeBlock) {
+                      activeBlock.innerHTML = renderMarkdown(thinkRaw);
+                      if (state.autoScroll) scrollToBottom();
+                    }
                   }
-                }
-              });
+                });
+              }, delay);
             }
           }
         } else if (evt.type === 'thinking_done') {
@@ -173,17 +175,19 @@ export async function streamAssistant(endpoint, body, userWrapper, assistantWrap
           if (streamBubble) {
             streamBubble.dataset.raw = raw;
             // Throttle markdown re-parsing to avoid O(n²) on long replies.
-            const now = performance.now();
-            if (!renderScheduled && now - lastRender >= RENDER_INTERVAL) {
+            if (!renderScheduled) {
               renderScheduled = true;
-              lastRender = now;
-              requestAnimationFrame(() => {
-                renderScheduled = false;
-                if (!streamFinished) {
-                  streamBubble.innerHTML = renderMarkdown(streamBubble.dataset.raw) + '<span class="streaming-cursor"></span>';
-                  scrollToBottom();
-                }
-              });
+              const delay = Math.max(0, RENDER_INTERVAL - (performance.now() - lastRender));
+              setTimeout(() => {
+                requestAnimationFrame(() => {
+                  renderScheduled = false;
+                  lastRender = performance.now();
+                  if (!streamFinished) {
+                    streamBubble.innerHTML = renderMarkdown(streamBubble.dataset.raw) + '<span class="streaming-cursor"></span>';
+                    if (state.autoScroll) scrollToBottom();
+                  }
+                });
+              }, delay);
             }
           }
         } else if (evt.type === 'done') {

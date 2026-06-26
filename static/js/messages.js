@@ -109,7 +109,7 @@ export function updateStreamingMessage(wrapper, raw) {
   const bubble = wrapper.querySelector('.bubble');
   bubble.dataset.raw = raw;
   bubble.innerHTML = renderMarkdown(raw) + '<span class="streaming-cursor"></span>';
-  scrollToBottom();
+  if (state.autoScroll) scrollToBottom();
 }
 
 export function finalizeStreamingMessage(wrapper) {
@@ -124,6 +124,7 @@ export function finalizeStreamingMessage(wrapper) {
     toggle.dataset.bound = '1';
     toggle.addEventListener('click', () => toggle.closest('.think-block').classList.toggle('expanded'));
   }
+  if (state.autoScroll) scrollToBottom();
 }
 
 export function showTruncationNotice(wrapper) {

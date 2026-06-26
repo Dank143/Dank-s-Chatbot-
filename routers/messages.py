@@ -3,16 +3,17 @@ import json
 import logging
 import re
 import uuid
+import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
 from openai import AsyncOpenAI
 
-from config import load_config, provider_api, provider_for_model, provider_default_model, _PROVIDERS
-from database import get_db, now_iso
+from config import load_config, provider_api, provider_for_model, _PROVIDERS
+from database import db_execute, run_db_task, now_iso
 from search import fetch_web_context, inject_web_context
-from llm import build_messages, is_asking_about_creator, llm_stream, reasoning_controls
+from llm import build_messages, is_asking_about_creator, llm_stream, reasoning_controls, race_models, get_client
 from schemas import RegenerateBody, SaveAssistantBody, SendMessageBody
 
 logger = logging.getLogger(__name__)
@@ -24,37 +25,15 @@ _SSE_HEADERS = {"Cache-Control": "no-cache", "X-Accel-Buffering": "no"}
 _SEP = r'[\s.\-…_]*'
 _DANG_VI_RE = re.compile(r'[Đđ]' + _SEP + r'[Ăă]' + _SEP + r'n' + _SEP + r'g', re.IGNORECASE)
 _DANG_EN_RE = re.compile(r'(?<![a-zA-Z])d' + _SEP + r'a' + _SEP + r'n' + _SEP + r'g(?![a-zA-Z])', re.IGNORECASE)
-_client_cache: dict[tuple, AsyncOpenAI] = {}
-
-_TITLE_MODEL_NIM = "qwen/qwen3-next-80b-a3b-instruct"
-_TITLE_MODEL_OLLAMA = "gemma4:31b-cloud"
-
-
-def _get_client(api_key: str, base_url: str) -> AsyncOpenAI:
-    key = (api_key, base_url)
-    if key not in _client_cache:
-        _client_cache[key] = AsyncOpenAI(api_key=api_key, base_url=base_url)
-    return _client_cache[key]
-
-
-def _client_for_provider(provider: str) -> AsyncOpenAI:
-    """Client for the given provider's current API key/base_url."""
-    api = provider_api(provider)
-    return _get_client(api["key"], api["base_url"])
-
-
-def _nim_client() -> AsyncOpenAI:
-    """Always return the NIM client (for aux tasks: title gen, etc.)."""
-    return _client_for_provider("nim")
 
 
 def _fallback_title(text: str) -> str:
     return text[:60].strip() + ("…" if len(text) > 60 else "")
 
 
-def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None", model: "str | None" = None) -> None:
+async def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None", model: "str | None" = None) -> None:
     """Persist an assistant message, bump the chat, and optionally set its title."""
-    with get_db() as conn:
+    def _task(conn):
         ts = now_iso()
         conn.execute(
             "INSERT INTO messages (id, chat_id, role, content, created_at, model) VALUES (?,?,?,?,?,?)",
@@ -63,11 +42,7 @@ def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None"
         conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (ts, chat_id))
         if title:
             conn.execute("UPDATE chats SET title=? WHERE id=?", (title, chat_id))
-
-
-def _set_title(chat_id: str, title: str) -> None:
-    with get_db() as conn:
-        conn.execute("UPDATE chats SET title=? WHERE id=?", (title, chat_id))
+    await run_db_task(_task)
 
 
 def _model_reasoning(model_id: str) -> "str | None":
@@ -89,57 +64,69 @@ def _build_request(history, today: str, model: str):
     extra_create, extra_system = reasoning_controls(_model_reasoning(model))
     messages = build_messages(history, defaults.get("system_prompt"), today, extra_system)
     prov = provider_for_model(model)
-    return (_client_for_provider(prov), messages,
-            defaults.get("max_tokens", 2048), defaults.get("temperature", 0.7), extra_create)
+    return (get_client(prov), messages,
+            defaults.get("max_tokens", 2048), defaults.get("temperature", 0.5), extra_create)
 
 
-async def _generate_title(user_content: str) -> str:
-    """LLM-generate a 2-8 word chat title; falls back to truncated text."""
-    fallback = _fallback_title(user_content)
-    system = "Output only a short conversation title: less than 10 words, no punctuation, no quotes, no explanation, no preamble, capitalize ONLY the first letter and proper nouns."
-    user = user_content[:500]
-
-    async def _fetch(provider: str, model: str) -> str:
-        client = _client_for_provider(provider)
-        resp = await client.chat.completions.create(
-            model=model,
-            messages=[
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            max_tokens=50,
-            temperature=0.0,
-            stream=False,
-        )
-        raw = resp.choices[0].message.content or ""
-        raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
-        raw = next((ln.strip() for ln in raw.splitlines() if ln.strip()), "")
-        raw = re.sub(r"^(?:title|name|subject)\s*[:\-–]\s*", "", raw, flags=re.IGNORECASE)
-        raw = raw.strip("\"'")
-        word_count = len(raw.split())
-        if not raw or not (2 <= word_count <= 8):
-            raise ValueError("Invalid title format")
-        return raw
-
-    nim_task = asyncio.create_task(_fetch("nim", _TITLE_MODEL_NIM))
+async def _generate_title(user_content: str, assistant_reply: str = "") -> str:
+    """LLM-generate a 3-6 word chat title; falls back to truncated text."""
+    cfg = load_config()
+    nim_model = cfg.get("title_model_nim")
+    ollama_model = cfg.get("title_model_ollama")
     
-    ollama_model = _TITLE_MODEL_OLLAMA
+    fallback = _fallback_title(user_content)
+    system = (
+        "Generate a short, natural title (3-6 words) that captures the TOPIC of what the user is asking about. "
+        "Do NOT describe the message itself or the user's action. Focus on the subject matter.\n\n"
+        "Rules: no punctuation, no quotes, no explanation, capitalize ONLY the first letter and proper nouns.\n\n"
+        "Examples:\n"
+        "User: \"Help me debug this Python error\" → Debugging a Python error\n"
+        "User: \"What's the capital of France?\" → Capital of France\n"
+        "User: \"Hello\" + Assistant talks about AI → Greeting and AI chat\n"
+    )
+    user_parts = [user_content[:300]]
+    if assistant_reply:
+        user_parts.append(f"\n\nAssistant replied: {assistant_reply[:300]}")
+    user = "".join(user_parts)
+
+    async def _fetch(provider: str, model: str) -> str | None:
+        try:
+            logger.info("Title generation started with %s using %s", provider, model)
+            client = get_client(provider)
+            resp = await client.chat.completions.create(
+                model=model,
+                messages=[
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user},
+                ],
+                max_tokens=50,
+                temperature=0.0,
+                stream=False,
+            )
+            raw = resp.choices[0].message.content or ""
+            raw = re.sub(r"<think>.*?</think>", "", raw, flags=re.DOTALL).strip()
+            raw = next((ln.strip() for ln in raw.splitlines() if ln.strip()), "")
+            raw = re.sub(r"^(?:title|name|subject)\s*[:\-–]\s*", "", raw, flags=re.IGNORECASE)
+            raw = raw.strip("\"'")
+            word_count = len(raw.split())
+            if not raw or not (1 <= word_count <= 12):
+                logger.warning("%s generated invalid title format: %r", provider, raw)
+                return None
+            logger.info("[Background] %s title generation completed: %r", provider, raw)
+            return raw
+        except Exception as e:
+            logger.warning("%s title generation inner error: %s", provider, e)
+            return None
+
+    nim_task = asyncio.create_task(_fetch("nim", nim_model)) if nim_model else None
     ollama_task = asyncio.create_task(_fetch("ollama", ollama_model)) if ollama_model else None
 
-    try:
-        res = await asyncio.wait_for(asyncio.shield(nim_task), timeout=10.0)
-        return res
-    except Exception as e:
-        logger.warning("NIM Title generation failed/timed out: %s", e)
-
-    if ollama_task:
-        try:
-            res = await asyncio.wait_for(asyncio.shield(ollama_task), timeout=2.0)
-            return res
-        except Exception as e:
-            logger.warning("Ollama Title generation failed/timed out: %s", e)
-
-    return fallback
+    res = await race_models(
+        ollama_task, nim_task, 
+        timeout=5.0, logger=logger, task_name="title",
+        primary_name="Ollama", backup_name="NIM"
+    )
+    return res if res else fallback
 
 
 @router.post("/{chat_id}/messages")
@@ -150,42 +137,41 @@ async def send_message(chat_id: str, body: SendMessageBody):
     documents = [d.model_dump() for d in (body.documents or [])]
     user_msg_id = str(uuid.uuid4())
 
-    def _setup():
+    def _setup(conn):
         att_json = json.dumps({"images": images, "documents": documents}) if (images or documents) else None
-        with get_db() as conn:
-            chat = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
-            if not chat:
-                raise HTTPException(404, "Chat not found")
-            chat = dict(chat)
-            model: str = str(body.model or chat["model"] or cfg.get("default_model") or "")
-            ts = now_iso()
-            conn.execute(
-                "INSERT INTO messages (id, chat_id, role, content, created_at, attachments, model) VALUES (?,?,?,?,?,?,?)",
-                (user_msg_id, chat_id, "user", body.content, ts, att_json, model),
-            )
-            conn.execute("UPDATE chats SET model=?, updated_at=? WHERE id=?", (model, ts, chat_id))
-            history = conn.execute(
-                "SELECT role, content, attachments FROM messages WHERE chat_id=? ORDER BY created_at", (chat_id,)
-            ).fetchall()
+        chat = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
+        if not chat:
+            raise HTTPException(404, "Chat not found")
+        chat = dict(chat)
+        model: str = str(body.model or chat["model"] or cfg.get("default_model") or "")
+        ts = now_iso()
+        conn.execute(
+            "INSERT INTO messages (id, chat_id, role, content, created_at, attachments, model) VALUES (?,?,?,?,?,?,?)",
+            (user_msg_id, chat_id, "user", body.content, ts, att_json, model),
+        )
+        conn.execute("UPDATE chats SET model=?, updated_at=? WHERE id=?", (model, ts, chat_id))
+        history = conn.execute(
+            "SELECT role, content, attachments FROM messages WHERE chat_id=? ORDER BY created_at", (chat_id,)
+        ).fetchall()
         return model, chat["title"] == "New Chat", history
 
-    model, needs_title, history = await asyncio.to_thread(_setup)
+    model, needs_title, history = await run_db_task(_setup)
 
     today = body.client_time or datetime.now(timezone.utc).strftime("%Y-%m-%d")
     client, messages, max_tokens, temperature, extra_create = _build_request(history, today, model)
 
+    # Launch title generation early so it overlaps with web search & streaming.
+    title_seed = body.content
+    if not title_seed and documents:
+        title_seed = "Uploaded file: " + ", ".join(d["name"] for d in documents)
+    title_task = (
+        asyncio.create_task(_generate_title(title_seed))
+        if needs_title and title_seed else None
+    )
+
     async def stream_response():
         asst_msg_id = str(uuid.uuid4())
         yield f"data: {json.dumps({'type': 'meta', 'user_msg_id': user_msg_id})}\n\n"
-
-        # Seed auto-title from user text or file names.
-        title_seed = body.content
-        if not title_seed and documents:
-            title_seed = "Uploaded file: " + ", ".join(d["name"] for d in documents)
-        title_task = (
-            asyncio.create_task(_generate_title(title_seed))
-            if needs_title and title_seed else None
-        )
 
         if body.web_search and body.content:
             # Provide recent turns as context for query rewriting.
@@ -211,7 +197,7 @@ async def send_message(chat_id: str, body: SendMessageBody):
         creator_resp = is_asking_about_creator(body.content)
         if creator_resp:
             fallback = _fallback_title(body.content) if needs_title and body.content else None
-            await asyncio.to_thread(_save_assistant, chat_id, asst_msg_id, creator_resp, fallback, model)
+            await _save_assistant(chat_id, asst_msg_id, creator_resp, fallback, model)
             yield f"data: {json.dumps({'type': 'delta', 'content': creator_resp})}\n\n"
             if fallback:
                 yield f"data: {json.dumps({'type': 'title', 'title': fallback})}\n\n"
@@ -244,22 +230,22 @@ async def send_message(chat_id: str, body: SendMessageBody):
             return
 
         # Persist answer and emit 'done' before resolving the title.
-        await asyncio.to_thread(_save_assistant, chat_id, asst_msg_id, hail + result["content"], None, model)
+        await _save_assistant(chat_id, asst_msg_id, hail + result["content"], None, model)
         yield f"data: {json.dumps({'type': 'done', 'asst_msg_id': asst_msg_id, 'finish_reason': result.get('finish_reason')})}\n\n"
 
         if needs_title:
             if title_task:
                 try:
-                    generated = await asyncio.wait_for(title_task, timeout=5.0)
+                    generated = await asyncio.wait_for(title_task, timeout=10.0)
                 except Exception:
                     generated = _fallback_title(title_seed)
             else:
                 # Image-only turn: no user text to title from — use the reply instead.
                 try:
-                    generated = await asyncio.wait_for(_generate_title(result["content"]), timeout=5.0)
+                    generated = await asyncio.wait_for(_generate_title(result["content"]), timeout=10.0)
                 except Exception:
                     generated = _fallback_title(result["content"])
-            await asyncio.to_thread(_set_title, chat_id, generated)
+            await db_execute("UPDATE chats SET title=? WHERE id=?", (generated, chat_id))
             yield f"data: {json.dumps({'type': 'title', 'title': generated})}\n\n"
 
     return StreamingResponse(stream_response(), media_type="text/event-stream", headers=_SSE_HEADERS)
@@ -267,17 +253,16 @@ async def send_message(chat_id: str, body: SendMessageBody):
 
 @router.delete("/{chat_id}/messages/from/{message_id}")
 async def delete_messages_from(chat_id: str, message_id: str):
-    def _work():
-        with get_db() as conn:
-            msg = conn.execute(
-                "SELECT created_at FROM messages WHERE id=? AND chat_id=?", (message_id, chat_id)
-            ).fetchone()
-            if not msg:
-                raise HTTPException(404, "Message not found")
-            conn.execute(
-                "DELETE FROM messages WHERE chat_id=? AND created_at >= ?", (chat_id, msg["created_at"])
-            )
-    await asyncio.to_thread(_work)
+    def _task(conn):
+        msg = conn.execute(
+            "SELECT created_at FROM messages WHERE id=? AND chat_id=?", (message_id, chat_id)
+        ).fetchone()
+        if not msg:
+            raise HTTPException(404, "Message not found")
+        conn.execute(
+            "DELETE FROM messages WHERE chat_id=? AND created_at >= ?", (chat_id, msg["created_at"])
+        )
+    await run_db_task(_task)
     return {"success": True}
 
 
@@ -287,17 +272,16 @@ async def save_assistant_message(chat_id: str, body: SaveAssistantBody):
         raise HTTPException(400, "Empty content")
     msg_id = str(uuid.uuid4())
 
-    def _work():
-        with get_db() as conn:
-            if not conn.execute("SELECT id FROM chats WHERE id=?", (chat_id,)).fetchone():
-                raise HTTPException(404, "Chat not found")
-            ts = now_iso()
-            conn.execute(
-                "INSERT INTO messages (id, chat_id, role, content, created_at, model) VALUES (?,?,?,?,?,?)",
-                (msg_id, chat_id, "assistant", body.content, ts, chat["model"]),
-            )
-            conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (ts, chat_id))
-    await asyncio.to_thread(_work)
+    def _task(conn):
+        if not conn.execute("SELECT id FROM chats WHERE id=?", (chat_id,)).fetchone():
+            raise HTTPException(404, "Chat not found")
+        ts = now_iso()
+        conn.execute(
+            "INSERT INTO messages (id, chat_id, role, content, created_at, model) VALUES (?,?,?,?,?,?)",
+            (msg_id, chat_id, "assistant", body.content, ts, cfg.get("default_model", "")),
+        )
+        conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (ts, chat_id))
+    await run_db_task(_task)
     return {"id": msg_id}
 
 
@@ -305,19 +289,18 @@ async def save_assistant_message(chat_id: str, body: SaveAssistantBody):
 async def regenerate_response(chat_id: str, body: RegenerateBody):
     cfg = load_config()
 
-    def _read():
-        with get_db() as conn:
-            chat = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
-            if not chat:
-                raise HTTPException(404, "Chat not found")
-            chat = dict(chat)
-            model: str = str(body.model or chat["model"] or cfg.get("default_model") or "")
-            history = conn.execute(
-                "SELECT role, content, attachments FROM messages WHERE chat_id=? ORDER BY created_at", (chat_id,)
-            ).fetchall()
+    def _read(conn):
+        chat = conn.execute("SELECT * FROM chats WHERE id=?", (chat_id,)).fetchone()
+        if not chat:
+            raise HTTPException(404, "Chat not found")
+        chat = dict(chat)
+        model: str = str(body.model or chat["model"] or cfg.get("default_model") or "")
+        history = conn.execute(
+            "SELECT role, content, attachments FROM messages WHERE chat_id=? ORDER BY created_at", (chat_id,)
+        ).fetchall()
         return model, history
 
-    model, history = await asyncio.to_thread(_read)
+    model, history = await run_db_task(_read)
 
     if not history:
         raise HTTPException(400, "No messages to regenerate from")
@@ -363,7 +346,7 @@ async def regenerate_response(chat_id: str, body: RegenerateBody):
         if not result["content"].strip():
             yield f"data: {json.dumps({'type': 'error', 'message': 'The model returned an empty response. Please try again.'})}\n\n"
             return
-        await asyncio.to_thread(_save_assistant, chat_id, asst_msg_id, result["content"], None, model)
+        await _save_assistant(chat_id, asst_msg_id, result["content"], None, model)
         yield f"data: {json.dumps({'type': 'done', 'asst_msg_id': asst_msg_id, 'finish_reason': result.get('finish_reason')})}\n\n"
 
     return StreamingResponse(stream_response(), media_type="text/event-stream", headers=_SSE_HEADERS)

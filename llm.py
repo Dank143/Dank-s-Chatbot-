@@ -4,13 +4,35 @@ import logging
 import re
 import time
 
+import httpx
+from openai import AsyncOpenAI
+from config import provider_api
+
 logger = logging.getLogger(__name__)
 
+_client_cache: dict[tuple, AsyncOpenAI] = {}
 
-_CREATOR_KEYWORDS_EN = {"creator", "maker", "developer", "father", "daddy"}
+def get_client(provider: str) -> AsyncOpenAI:
+    """Get or create an AsyncOpenAI client for the given provider."""
+    api = provider_api(provider)
+    key = (api["key"], api["base_url"])
+    if key not in _client_cache:
+        _client_cache[key] = AsyncOpenAI(
+            api_key=key[0],
+            base_url=key[1],
+            http_client=httpx.AsyncClient(
+                http2=True,
+                limits=httpx.Limits(max_keepalive_connections=20, max_connections=40),
+                timeout=httpx.Timeout(60.0, connect=5.0),
+            ),
+        )
+    return _client_cache[key]
+
+
+_CREATOR_KEYWORDS_EN = {} # {"creator", "maker", "developer", "father", "daddy"}
 _CREATOR_RESPONSE_EN = "ALL HAIL MISTER DANG! WOOOOOO BABIIIIII!"
 
-_CREATOR_PHRASES_VI = ["tạo ra", "làm ra", "code ra", "thiết kế", "nhà sáng tạo", "cha đẻ", "ông trùm"]
+_CREATOR_PHRASES_VI = [] # ["tạo ra", "làm ra", "code ra", "thiết kế", "nhà sáng tạo", "cha đẻ", "ông trùm"]
 _CREATOR_RESPONSE_VI = "QUÝ NGÀI ĐĂNG VĨ ĐẠI. SIUUUUUU!"
 
 
@@ -21,6 +43,53 @@ def is_asking_about_creator(text: str) -> str | None:
     pattern = r'\byour\s+(?:' + '|'.join(_CREATOR_KEYWORDS_EN) + r')\b'
     if re.search(pattern, text, re.IGNORECASE):
         return _CREATOR_RESPONSE_EN
+    return None
+
+
+async def race_models(primary_task, backup_task, timeout=5.0, logger=None, task_name="task", primary_name="Primary", backup_name="Backup"):
+    """
+    Run two tasks (primary and backup) with an overall timeout.
+    Returns the result of primary if it succeeds.
+    If primary fails or times out, returns backup if it succeeds.
+    Returns None if both fail or timeout.
+    """
+    start_time = time.monotonic()
+    pending = {t for t in (primary_task, backup_task) if t}
+    log = logger or logging.getLogger(__name__)
+
+    while pending:
+        elapsed = time.monotonic() - start_time
+        remaining = timeout - elapsed
+        if remaining <= 0:
+            break
+
+        done, pending = await asyncio.wait(pending, timeout=remaining, return_when=asyncio.FIRST_COMPLETED)
+        if not done:
+            break
+
+        if primary_task in done:
+            res = primary_task.result()
+            if res:
+                log.info("%s was used for %s: %r", primary_name, task_name, res)
+                return res
+                
+        if backup_task and backup_task in done:
+            res = backup_task.result()
+            if res:
+                if primary_task in pending:
+                    elapsed = time.monotonic() - start_time
+                    remaining = timeout - elapsed
+                    if remaining > 0:
+                        prim_done, _ = await asyncio.wait([primary_task], timeout=remaining)
+                        if primary_task in prim_done:
+                            n_res = primary_task.result()
+                            if n_res:
+                                log.info("%s finished in time and was used for %s: %r", primary_name, task_name, n_res)
+                                return n_res
+                log.info("%s timed out or failed, %s used for %s: %r", primary_name, backup_name, task_name, res)
+                return res
+
+    log.warning("%s fully failed or timed out.", task_name.capitalize())
     return None
 
 

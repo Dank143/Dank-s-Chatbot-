@@ -11,7 +11,7 @@ import {
 import { api } from './api.js';
 import { clearPendingFiles } from './files.js';
 import { updateModelLabel, updateDuoModelLabel } from './models.js';
-import { appendMessage } from './messages.js';
+import { appendMessage, injectRetryDuoButton } from './messages.js';
 import { streamAssistant } from './stream.js';
 
 const GREETINGS = [
@@ -335,23 +335,72 @@ export async function openChat(chatId) {
       const row = document.createElement('div');
       row.className = 'duo-message-row';
       messagesEl.appendChild(row);
-      appendMessage(msg, false, row);
-      appendMessage(chat.messages[i+1], false, row);
-      lastModel1 = msg.model;
-      lastModel2 = chat.messages[i+1].model;
+      
+      let leftMsg = msg;
+      let rightMsg = chat.messages[i+1];
+      if (msg.duo_side === 1 && chat.messages[i+1].duo_side === 0) {
+        leftMsg = chat.messages[i+1];
+        rightMsg = msg;
+      }
+
+      appendMessage(leftMsg, false, row);
+      appendMessage(rightMsg, false, row);
+      lastModel1 = leftMsg.model;
+      lastModel2 = rightMsg.model;
+      injectRetryDuoButton(row);
       i += 2;
       continue;
     }
     if (msg.role === 'assistant') {
+      // Orphaned assistant message. Check if it was part of an interrupted duo generation.
+      let isOrphanedDuo = false;
+      const prevMsg = i > 0 ? chat.messages[i-1] : null;
+      if (msg.duo_side === 1) {
+        isOrphanedDuo = true; // Definitely the right side of a duo
+      } else if (chat.duo_mode === 1 && i === chat.messages.length - 1 && prevMsg && prevMsg.role === 'user') {
+        isOrphanedDuo = true; // Last message in a duo chat, partner probably didn't finish
+      }
+
+      if (isOrphanedDuo) {
+        const row = document.createElement('div');
+        row.className = 'duo-message-row';
+        messagesEl.appendChild(row);
+
+        const placeholder = { role: 'assistant', content: '_Generation interrupted or failed_', model: state.selectedModel, duo_side: msg.duo_side === 0 ? 1 : 0 };
+        const leftMsg = msg.duo_side === 0 ? msg : placeholder;
+        const rightMsg = msg.duo_side === 1 ? msg : placeholder;
+
+        appendMessage(leftMsg, false, row);
+        appendMessage(rightMsg, false, row);
+        lastModel1 = leftMsg.model;
+        lastModel2 = rightMsg.model;
+        injectRetryDuoButton(row);
+
+        // Retroactively mark the preceding user prompt as duo so it gets centered properly
+        const userWrappers = messagesEl.querySelectorAll('.message-wrapper.user');
+        const lastUserWrapper = userWrappers[userWrappers.length - 1];
+        if (lastUserWrapper) lastUserWrapper.classList.add('duo');
+
+        i++;
+        continue;
+      }
+
       lastModel1 = msg.model;
       lastModel2 = null;
     }
+    
     if (msg.role === 'user') {
       let isDuo = false;
+      // Normal duo pair check
       if (i + 1 < chat.messages.length && chat.messages[i+1].role === 'assistant' && 
           i + 2 < chat.messages.length && chat.messages[i+2].role === 'assistant') {
         isDuo = true;
       }
+      // Orphaned duo check for the user prompt
+      else if (chat.duo_mode === 1 && i === chat.messages.length - 2 && chat.messages[i+1].role === 'assistant') {
+        isDuo = true;
+      }
+      
       const wrapper = appendMessage(msg);
       if (isDuo) wrapper.classList.add('duo');
       i++;
@@ -456,8 +505,8 @@ export async function sendMessage() {
     row.className = 'duo-message-row';
     messagesEl.appendChild(row);
 
-    const asstWrapperL = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true, row);
-    const asstWrapperR = appendMessage({ role: 'assistant', content: '', model: state.selectedModel2 }, true, row);
+    const asstWrapperL = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true, row, 0);
+    const asstWrapperR = appendMessage({ role: 'assistant', content: '', model: state.selectedModel2 }, true, row, 1);
 
     const bodyBase = {
       content,
@@ -467,18 +516,20 @@ export async function sendMessage() {
       client_time: clientTime(),
     };
 
-    await Promise.all([
+    await Promise.allSettled([
       streamAssistant(
         `/api/chats/${state.activeChatId}/messages`,
-        { ...bodyBase, model: state.selectedModel },
+        { ...bodyBase, model: state.selectedModel, duo_side: 0 },
         userWrapper, asstWrapperL
       ),
       streamAssistant(
         `/api/chats/${state.activeChatId}/messages`,
-        { ...bodyBase, model: state.selectedModel2, skip_user_save: true },
+        { ...bodyBase, model: state.selectedModel2, skip_user_save: true, duo_side: 1 },
         null, asstWrapperR
       ),
     ]);
+
+    injectRetryDuoButton(row);
   } else {
     // ── Normal single-model path ──
     const userWrapper = appendMessage({ role: 'user', content, attachments: attJson });

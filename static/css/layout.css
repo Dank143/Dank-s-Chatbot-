@@ -264,18 +264,22 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   width: 100%;
   position: relative;
+  margin-bottom: 65px;
 }
 
 .duo-message-row::before {
   content: "";
   position: absolute;
-  top: 8px; bottom: 24px; left: 50%;
+  top: 8px; bottom: 0px; left: 50%;
   border-left: 1px solid var(--border-input);
 }
 
 .duo-message-row > .message-wrapper {
   margin: 0;
   border-bottom: none;
+  display: flex;
+  flex-direction: column;
+  max-width: 100%; /* Must be 100% so gaps are controlled exactly by padding */
 }
 
 .duo-message-row > .message-wrapper:first-child {
@@ -283,16 +287,68 @@
   justify-self: end;
   margin-left: auto;
   margin-right: 0;
-  padding-left: 48px;
-  padding-right: 48px;
+  padding-left: 60px;  /* Controls the far LEFT gap (to the sidebar) */
+  padding-right: 32px; /* Controls the gap to the center line */
 }
 
 .duo-message-row > .message-wrapper:last-child {
   justify-self: start;
   margin-left: 0;
   margin-right: auto;
-  padding-left: 48px;
-  padding-right: 48px;
+  padding-left: 32px;  /* Controls the gap to the center line */
+  padding-right: 36px; /* Controls the far RIGHT gap (to the scrollbar) */
+}
+
+.duo-message-row > .message-wrapper .message-body {
+  max-height: 62.5vh;
+  overflow-y: auto;
+  scrollbar-width: thin;
+  scrollbar-color: var(--border-input) transparent;
+  padding-right: 8px; /* space for scrollbar */
+}
+
+/* webkit scrollbar for duo message body */
+.duo-message-row > .message-wrapper .message-body::-webkit-scrollbar {
+  width: 6px;
+}
+.duo-message-row > .message-wrapper .message-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.duo-message-row > .message-wrapper .message-body::-webkit-scrollbar-thumb {
+  background: var(--border-input);
+  border-radius: 99px;
+}
+
+/* Retry Both Button in Duo Mode */
+.retry-duo-btn {
+  position: absolute;
+  bottom: -36px; /* Placed in the empty margin below the row */
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg);
+  border: 1px solid var(--border-input);
+  border-radius: 50%;
+  width: 36px;
+  height: 36px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--text-sub);
+  cursor: pointer;
+  z-index: 4;
+  transition: all var(--transition);
+  box-shadow: 0 2px 8px var(--shadow);
+}
+
+.retry-duo-btn:hover {
+  background: var(--bg-hover);
+  color: var(--text);
+  border-color: var(--border);
+}
+
+.retry-duo-btn svg {
+  width: 16px;
+  height: 16px;
 }
 
 @media (max-width: 768px) {
@@ -440,7 +496,7 @@
 .tips-wrap { position: relative; display: flex; align-items: center; }
 .tips-popup {
   position: absolute;
-  top: calc(100% + 22px);
+  top: calc(100% + 16px);
   right: 0;
   z-index: 60;
   width: 280px;

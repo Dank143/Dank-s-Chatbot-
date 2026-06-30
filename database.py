@@ -38,6 +38,7 @@ def init_db():
                 created_at  TEXT NOT NULL,
                 attachments TEXT,
                 model       TEXT,
+                duo_side    INTEGER NOT NULL DEFAULT 0,
                 FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
             );
         """)
@@ -54,6 +55,20 @@ def init_db():
         # Migration: add duo_mode column if missing.
         try:
             conn.execute("ALTER TABLE chats ADD COLUMN duo_mode INTEGER NOT NULL DEFAULT 0")
+        except sqlite3.OperationalError:
+            pass
+        # Migration: add duo_side column if missing, and fix existing duo chats.
+        try:
+            conn.execute("ALTER TABLE messages ADD COLUMN duo_side INTEGER NOT NULL DEFAULT 0")
+            conn.execute("""
+                WITH numbered AS (
+                    SELECT id, (ROW_NUMBER() OVER(PARTITION BY chat_id ORDER BY created_at) - 1) % 2 AS side
+                    FROM messages 
+                    WHERE role = 'assistant' AND chat_id IN (SELECT id FROM chats WHERE duo_mode = 1)
+                )
+                UPDATE messages SET duo_side = (SELECT side FROM numbered WHERE numbered.id = messages.id)
+                WHERE id IN (SELECT id FROM numbered);
+            """)
         except sqlite3.OperationalError:
             pass
 

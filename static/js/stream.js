@@ -130,7 +130,7 @@ export async function streamAssistant(endpoint, body, userWrapper, assistantWrap
                   <span class="think-label">Thinking<span class="thinking-dots"></span></span>
                 </div>
                 <div class="think-content"></div>`;
-              assistantWrapper.insertBefore(block, streamBubble);
+              streamBubble.parentNode.insertBefore(block, streamBubble);
               
               const toggle = block.querySelector('.think-toggle');
               toggle.dataset.bound = '1';

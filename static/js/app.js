@@ -3,7 +3,7 @@ import { loadTheme } from './theme.js';
 import { loadModels, updateModelLabel } from './models.js';
 import { loadChats, showWelcome, openChat } from './chat.js';
 import { setupEventListeners } from './events.js';
-import { copyCode, copyMessage, editMessage, retryMessage, downloadCode } from './messages.js';
+import { copyCode, copyMessage, editMessage, retryMessage, retryDuoMessage, downloadCode } from './messages.js';
 import { ChatSearchModal } from './search.js';
 import { state } from './state.js';
 
@@ -12,6 +12,7 @@ window.copyCode     = copyCode;
 window.copyMessage  = copyMessage;
 window.editMessage  = editMessage;
 window.retryMessage = retryMessage;
+window.retryDuoMessage = retryDuoMessage;
 window.downloadCode = downloadCode;
 
 async function init() {

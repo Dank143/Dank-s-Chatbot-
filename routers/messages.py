@@ -31,19 +31,19 @@ def _fallback_title(text: str) -> str:
     return text[:60].strip() + ("…" if len(text) > 60 else "")
 
 
-async def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None", model: "str | None" = None, overwrite: bool = False) -> None:
+async def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None", model: "str | None" = None, overwrite: bool = False, duo_side: int = 0) -> None:
     """Persist an assistant message, bump the chat, and optionally set its title."""
     def _task(conn):
         ts = now_iso()
         if overwrite:
             conn.execute(
-                "UPDATE messages SET content=?, model=? WHERE id=?",
-                (content, model, msg_id)
+                "UPDATE messages SET content=?, model=?, duo_side=? WHERE id=?",
+                (content, model, duo_side, msg_id)
             )
         else:
             conn.execute(
-                "INSERT INTO messages (id, chat_id, role, content, created_at, model) VALUES (?,?,?,?,?,?)",
-                (msg_id, chat_id, "assistant", content, ts, model),
+                "INSERT INTO messages (id, chat_id, role, content, created_at, model, duo_side) VALUES (?,?,?,?,?,?,?)",
+                (msg_id, chat_id, "assistant", content, ts, model, duo_side),
             )
         conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (ts, chat_id))
         if title:
@@ -83,7 +83,7 @@ async def _generate_title(user_content: str, assistant_reply: str = "") -> str:
     fallback = _fallback_title(user_content)
     system = (
         "Generate a short, natural title (3-6 words) that captures the TOPIC of what the user is asking about. "
-        "Do NOT describe the message itself or the user's action. Focus on the subject matter.\n\n"
+        "Do NOT describe the message itself or the user's action. Focus on the subject matter. Use the same language as the user's prompt.\n\n"
         "Rules: no punctuation, no quotes, no explanation, capitalize ONLY the first letter and proper nouns.\n\n"
         "Examples:\n"
         "User: \"Help me debug this Python error\" → Debugging a Python error\n"
@@ -157,9 +157,22 @@ async def send_message(chat_id: str, body: SendMessageBody):
                 (user_msg_id, chat_id, "user", body.content, ts, att_json, model),
             )
         conn.execute("UPDATE chats SET model=?, updated_at=? WHERE id=?", (model, ts, chat_id))
-        history = conn.execute(
-            "SELECT role, content, attachments FROM messages WHERE chat_id=? ORDER BY created_at", (chat_id,)
+        history_raw = conn.execute(
+            "SELECT role, content, attachments, duo_side FROM messages WHERE chat_id=? ORDER BY created_at", (chat_id,)
         ).fetchall()
+        
+        # Filter history to isolate Duo tracks: keep all user messages, and only assistant messages for this track.
+        history = [dict(m) for m in history_raw if m["role"] == "user" or m["duo_side"] == body.duo_side]
+        
+        # If skip_user_save is true, the user message might not be in history yet due to race condition.
+        if body.skip_user_save:
+            if not history or history[-1]["role"] != "user" or history[-1]["content"] != body.content:
+                history.append({
+                    "role": "user",
+                    "content": body.content,
+                    "attachments": att_json
+                })
+                
         return model, chat["title"] == "New Chat", history
 
     model, needs_title, history = await run_db_task(_setup)
@@ -204,7 +217,7 @@ async def send_message(chat_id: str, body: SendMessageBody):
         creator_resp = is_asking_about_creator(body.content)
         if creator_resp:
             fallback = _fallback_title(body.content) if needs_title and body.content else None
-            await _save_assistant(chat_id, asst_msg_id, creator_resp, fallback, model)
+            await _save_assistant(chat_id, asst_msg_id, creator_resp, fallback, model, False, body.duo_side)
             yield f"data: {json.dumps({'type': 'delta', 'content': creator_resp})}\n\n"
             if fallback:
                 yield f"data: {json.dumps({'type': 'title', 'title': fallback})}\n\n"
@@ -237,7 +250,7 @@ async def send_message(chat_id: str, body: SendMessageBody):
             return
 
         # Persist answer and emit 'done' before resolving the title.
-        await _save_assistant(chat_id, asst_msg_id, hail + result["content"], None, model)
+        await _save_assistant(chat_id, asst_msg_id, hail + result["content"], None, model, False, body.duo_side)
         yield f"data: {json.dumps({'type': 'done', 'asst_msg_id': asst_msg_id, 'finish_reason': result.get('finish_reason')})}\n\n"
 
         if needs_title:
@@ -302,7 +315,7 @@ async def regenerate_response(chat_id: str, body: RegenerateBody):
             raise HTTPException(404, "Chat not found")
         chat = dict(chat)
         model: str = str(body.model or chat["model"] or cfg.get("default_model") or "")
-        history_query = "SELECT role, content, attachments FROM messages WHERE chat_id=?"
+        history_query = "SELECT role, content, attachments, duo_side FROM messages WHERE chat_id=?"
         params = [chat_id]
         if body.overwrite_message_id:
             # When overwriting, the history is everything before the message being overwritten
@@ -312,7 +325,11 @@ async def regenerate_response(chat_id: str, body: RegenerateBody):
                 params.append(target_msg["created_at"])
         
         history_query += " ORDER BY created_at"
-        history = conn.execute(history_query, tuple(params)).fetchall()
+        history_raw = conn.execute(history_query, tuple(params)).fetchall()
+        
+        # Filter history to isolate Duo tracks: keep all user messages, and only assistant messages for this track.
+        history = [m for m in history_raw if m["role"] == "user" or m["duo_side"] == body.duo_side]
+        
         return model, history
 
     model, history = await run_db_task(_read)

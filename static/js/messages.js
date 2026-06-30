@@ -38,12 +38,14 @@ export function searchIndicatorHtml(query) {
 }
 
 // Render a user or assistant message bubble (streaming=true adds cursor placeholder).
-export function appendMessage(msg, streaming = false, container = null) {
+export function appendMessage(msg, streaming = false, container = null, duoSide = null) {
   const target = container || messagesEl;
   const wrapper = document.createElement('div');
   wrapper.className = `message-wrapper ${msg.role}`;
   if (msg.id) wrapper.dataset.msgId = msg.id;
   if (msg.model) wrapper.dataset.model = msg.model;
+  if (duoSide !== null) wrapper.dataset.duoSide = duoSide;
+  else if (msg.duo_side !== undefined) wrapper.dataset.duoSide = msg.duo_side;
 
   if (msg.role === 'user') {
     const att = msg.attachments ? JSON.parse(msg.attachments) : {};
@@ -91,9 +93,11 @@ export function appendMessage(msg, streaming = false, container = null) {
         ${badgeHtml(msgModel, 26)}
         ${modelName ? `<span class="model-tag">${escHtml(modelName)}</span>` : ''}
       </div>
-      ${thinkBlockHtml}
-      <div class="bubble" data-raw="${escAttr(visible)}">
-        ${streaming ? thinkingIndicator() : renderMarkdown(visible)}
+      <div class="message-body">
+        ${thinkBlockHtml}
+        <div class="bubble" data-raw="${escAttr(visible)}">
+          ${streaming ? thinkingIndicator() : renderMarkdown(visible)}
+        </div>
       </div>
       ${!streaming ? assistantActions : ''}
     `;
@@ -222,7 +226,16 @@ export function copyCode(btn) {
 async function deleteFrom(wrapper, msgId) {
   await api(`/chats/${state.activeChatId}/messages/from/${msgId}`, { method: 'DELETE' });
   const wrappers = [...messagesEl.querySelectorAll('.message-wrapper')];
-  wrappers.slice(wrappers.indexOf(wrapper)).forEach((w) => w.remove());
+  wrappers.slice(wrappers.indexOf(wrapper)).forEach((w) => {
+    const parent = w.parentElement;
+    w.remove();
+    // Clean up empty duo rows to prevent floating buttons and lines
+    if (parent && parent.classList.contains('duo-message-row')) {
+      if (!parent.querySelector('.message-wrapper')) {
+        parent.remove();
+      }
+    }
+  });
 }
 
 export async function editMessage(btn) {
@@ -322,8 +335,8 @@ export async function editMessage(btn) {
       row.className = 'duo-message-row';
       messagesEl.appendChild(row);
 
-      const asstWrapperL = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true, row);
-      const asstWrapperR = appendMessage({ role: 'assistant', content: '', model: state.selectedModel2 }, true, row);
+      const asstWrapperL = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true, row, 0);
+      const asstWrapperR = appendMessage({ role: 'assistant', content: '', model: state.selectedModel2 }, true, row, 1);
 
       const bodyBase = {
         content: newContent,
@@ -334,9 +347,11 @@ export async function editMessage(btn) {
       };
 
       await Promise.all([
-        streamAssistant(`/api/chats/${state.activeChatId}/messages`, { ...bodyBase, model: state.selectedModel }, userWrapper, asstWrapperL),
-        streamAssistant(`/api/chats/${state.activeChatId}/messages`, { ...bodyBase, model: state.selectedModel2, skip_user_save: true }, null, asstWrapperR),
+        streamAssistant(`/api/chats/${state.activeChatId}/messages`, { ...bodyBase, model: state.selectedModel, duo_side: 0 }, userWrapper, asstWrapperL),
+        streamAssistant(`/api/chats/${state.activeChatId}/messages`, { ...bodyBase, model: state.selectedModel2, skip_user_save: true, duo_side: 1 }, null, asstWrapperR),
       ]);
+      
+      injectRetryDuoButton(row);
     } else {
       const userWrapper = appendMessage({ role: 'user', content: newContent, attachments: attJson });
       const assistantWrapper = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true);
@@ -375,6 +390,11 @@ export async function retryMessage(btn) {
   const row = wrapper.closest('.duo-message-row');
   const nextNode = (row || wrapper).nextElementSibling;
   
+  if (row) {
+    const duoBtn = row.querySelector('.retry-duo-btn');
+    if (duoBtn) duoBtn.remove();
+  }
+  
   if (nextNode) {
      const targetForDelete = nextNode.classList.contains('message-wrapper') ? nextNode : nextNode.querySelector('.message-wrapper');
      if (targetForDelete && targetForDelete.dataset.msgId) {
@@ -395,6 +415,12 @@ export async function retryMessage(btn) {
   
   const existingActions = wrapper.querySelector('.message-actions');
   if (existingActions) existingActions.remove();
+
+  // Clear any notices or extra blocks from the previous run
+  ['.generation-stopped', '.error-box', '.truncation-notice', '.think-block'].forEach(sel => {
+    const el = wrapper.querySelector(sel);
+    if (el) el.remove();
+  });
   
   // Notice we use overwrite_message_id instead of deleting the message entirely
   await streamAssistant(
@@ -403,7 +429,8 @@ export async function retryMessage(btn) {
       model: model,
       web_search: state.webSearch || needsWebSearch(lastUserText) || undefined,
       client_time: clientTime(),
-      overwrite_message_id: msgId
+      overwrite_message_id: msgId,
+      duo_side: parseInt(wrapper.dataset.duoSide || 0)
     },
     null, wrapper
   );
@@ -414,4 +441,82 @@ export async function retryMessage(btn) {
   if (sendBtn) sendBtn.disabled = !$('messageInput').value.trim();
   $('messageInput').focus();
   await (await import('./chat.js')).loadChats();
+  
+  if (row && row.classList.contains('duo-message-row')) {
+    injectRetryDuoButton(row);
+  }
+}
+
+export function injectRetryDuoButton(row) {
+  if (!row || row.querySelector('.retry-duo-btn')) return;
+  const btnHtml = `<button class="retry-duo-btn" title="Retry Both" onclick="retryDuoMessage(this)">
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 8"/><path d="M3 3v5h5"/></svg>
+  </button>`;
+  row.insertAdjacentHTML('beforeend', btnHtml);
+}
+
+export async function retryDuoMessage(btn) {
+  if (state.streaming) return;
+  const row = btn.closest('.duo-message-row');
+  if (!row) return;
+  
+  const wrappers = Array.from(row.querySelectorAll('.message-wrapper'));
+  if (wrappers.length !== 2) return;
+  
+  btn.remove();
+
+  const nextNode = row.nextElementSibling;
+  if (nextNode) {
+     const targetForDelete = nextNode.classList.contains('message-wrapper') ? nextNode : nextNode.querySelector('.message-wrapper');
+     if (targetForDelete && targetForDelete.dataset.msgId) {
+        await deleteFrom(targetForDelete, targetForDelete.dataset.msgId);
+     }
+  }
+
+  const lastUser = [...messagesEl.querySelectorAll('.message-wrapper.user .bubble')].pop();
+  const lastUserText = lastUser ? (lastUser.dataset.raw || lastUser.textContent.trim()) : '';
+  const webSearch = state.webSearch || needsWebSearch(lastUserText) || undefined;
+  const cTime = clientTime();
+
+  beginStreaming();
+
+  const promises = wrappers.map(wrapper => {
+    const msgId = wrapper.dataset.msgId;
+    const model = wrapper.dataset.model;
+    const bubble = wrapper.querySelector('.bubble');
+    bubble.innerHTML = '<div class="streaming-cursor"></div>';
+    bubble.dataset.raw = '';
+    
+    const existingActions = wrapper.querySelector('.message-actions');
+    if (existingActions) existingActions.remove();
+
+    // Clear any notices or extra blocks from the previous run
+    ['.generation-stopped', '.error-box', '.truncation-notice', '.think-block'].forEach(sel => {
+      const el = wrapper.querySelector(sel);
+      if (el) el.remove();
+    });
+
+    return streamAssistant(
+      `/api/chats/${state.activeChatId}/regenerate`,
+      {
+        model: model,
+        web_search: webSearch,
+        client_time: cTime,
+        overwrite_message_id: msgId,
+        duo_side: parseInt(wrapper.dataset.duoSide || 0)
+      },
+      null, wrapper
+    );
+  });
+
+  await Promise.allSettled(promises);
+
+  endStreaming();
+  updateSendBtn();
+  const sendBtn = $('sendBtn');
+  if (sendBtn) sendBtn.disabled = !$('messageInput').value.trim();
+  $('messageInput').focus();
+  await (await import('./chat.js')).loadChats();
+  
+  injectRetryDuoButton(row);
 }

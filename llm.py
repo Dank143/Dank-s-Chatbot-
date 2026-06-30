@@ -93,17 +93,7 @@ async def race_models(primary_task, backup_task, timeout=5.0, logger=None, task_
     return None
 
 
-# Non-Latin script detector (CJK, Hangul, Arabic, Cyrillic).
-_NON_LATIN_RE = re.compile(
-    r'[぀-ヿ㐀-䶿一-鿿가-힯'
-    r'豈-﫿؀-ۿЀ-ӿ]'
-)
 
-
-def is_non_english(text: str, threshold: float = 0.15) -> bool:
-    if not text:
-        return False
-    return len(_NON_LATIN_RE.findall(text)) / len(text) > threshold
 
 
 def parse_attachments(raw: str | None) -> dict:
@@ -239,7 +229,6 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
     full_content: list[str] = []
     think_content: list[str] = []
     finish_reason = None
-    lang_checked = False
     in_think = False
     tag_buf = ""  # holds tail chars that might be a partial tag
     raw_chunks: list[str] = []  # raw model text (pre-think-filter), for blank rescue
@@ -338,15 +327,6 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
                 if not visible:
                     continue
                 full_content.append(visible)
-                if not lang_checked:
-                    sample = "".join(full_content)
-                    # Wait for 60+ chars to avoid false positives from stray CJK.
-                    if len(sample) >= 60:
-                        lang_checked = True
-                        if is_non_english(sample, threshold=0.30):
-                            logger.warning("llm_abort non_english model=%s sample=%r", model, sample[:60])
-                            yield f"data: {json.dumps({'type': 'error', 'message': 'Model responded in a non-English language. Try rephrasing your question or switching models.'})}\n\n"
-                            return
                 # Signal end of thinking phase when the first visible delta arrives.
                 if think_content and len(full_content) == 1:
                     think_secs = round(time.monotonic() - t_think_start) if t_think_start else 0
@@ -366,7 +346,6 @@ async def llm_stream(client, model, messages, max_tokens, temperature, result: d
                 finish_reason = None
                 in_think = False
                 tag_buf = ""
-                lang_checked = False
                 t_first = None
                 t_think_start = None
                 raw_chunks.clear()

@@ -1,4 +1,5 @@
 import asyncio
+import json
 import math
 import re
 import time
@@ -12,7 +13,7 @@ from llm import race_models, get_client
 
 from urllib.parse import urlparse, parse_qs
 
-from .classifier import classify, clean_query, wants_wiki
+from .classifier import clean_query
 from .fetcher import fetch_content, mediawiki_search, skip
 
 _log = logging.getLogger(__name__)
@@ -31,7 +32,7 @@ _cache: dict[tuple, tuple] = {}
 _wiki_host_cache: dict[str, "str | None"] = {}
 
 # "wiki*" services that are not entity wikis, and foreign-language Wikipedias.
-_NONWIKI_HOSTS = ("wikihow", "wikiedu", "wiktionary", "wikitravel", "wikiquote", "wikidata")
+_NONWIKI_HOSTS = ("wikihow", "wikiedu", "wiktionary", "wikitravel", "wikiquote", "wikidata", "namu.wiki")
 
 
 def _is_wiki_host(host: str) -> bool:
@@ -46,38 +47,7 @@ def _is_wiki_host(host: str) -> bool:
     return True
 
 
-def discover_wiki_host(results: list[dict], terms: list[str]) -> "str | None":
-    """Pick the wiki host matching the query via term-in-URL overlap + article-path bonus."""
-    best, best_score = None, 0
-    for r in results:
-        u = r["url"].lower()
-        parsed = urlparse(u)
-        if not _is_wiki_host(parsed.netloc):
-            continue
-        score = sum(t in u for t in terms)
-        if "/wiki/" in parsed.path or "/w/" in parsed.path:
-            score += 1
-        if score > best_score:
-            best, best_score = parsed.netloc, score
-    return best
-
-
-async def _wiki_host_for(rewritten: str, terms: list[str]) -> "tuple[str | None, list[dict]]":
-    """Discover the wiki host for an entity query; return (host, probe_results).
-    Probe results are reused as seed URLs. Only successful discoveries are cached.
-    """
-    key = next((w.lower() for w in rewritten.split() if len(w) > 2), rewritten.lower())
-    # Allow fandom in probe for host discovery; cap retries to save budget.
-    probe = await _ddg_search(
-        f"{rewritten} wiki", site=None, max_results=8,
-        allowed=_FANDOM_ALLOW, max_attempts=2,
-    )
-    if key in _wiki_host_cache:
-        return _wiki_host_cache[key], probe
-    host = discover_wiki_host(probe, terms)
-    if host:
-        _wiki_host_cache[key] = host
-    return host, probe
+# Dynamic wiki host discovery removed in favor of robust DDG text search.
 
 
 _FANDOM_ALLOW = frozenset({"fandom.com"})
@@ -112,19 +82,19 @@ def _cache_set(key: tuple, value: "tuple[str, dict]") -> None:
 
 async def _ddg_search(
     query: str, site: str | None = None, max_results: int = 4,
-    allowed: "frozenset[str]" = frozenset(), max_attempts: int = 3,
+    allowed: "frozenset[str]" = frozenset(), max_attempts: int = 5,
 ) -> list[dict]:
     """DDG text search (off-thread), optionally site-scoped; skips junk domains.
     `allowed` whitelists otherwise-skipped domains. `max_attempts` bounds retries.
     """
     search_query = f"site:{site} {query}" if site else query
-    # Retry with backoff on flaky DDG backends. Empty results get at most 1 retry.
     last_exc = False
-    empty_seen = 0
+    backends = ["duckduckgo", "google", "yandex", "yahoo", "brave"]
     for attempt in range(max_attempts):
+        backend = backends[attempt % len(backends)]
         try:
             results = await asyncio.to_thread(
-                lambda: list(DDGS(timeout=8).text(search_query, max_results=max_results))
+                lambda: list(DDGS(timeout=8).text(search_query, max_results=max_results, backend=backend))
             )
             mapped = [
                 {"url": r["href"], "snippet": r.get("body", ""), "title": r.get("title", "")}
@@ -133,9 +103,7 @@ async def _ddg_search(
             ]
             if mapped:
                 return mapped
-            empty_seen += 1
-            if empty_seen > 1:
-                return mapped
+            # If mapped is empty (all skipped), wait and retry.
         except Exception:
             last_exc = True
         # No backoff after the final attempt — it only delays the return.
@@ -225,16 +193,20 @@ async def _fetch_media(rewritten: str, original: str, num_urls: int) -> tuple[st
     return ctx, debug
 
 
-_REWRITE_SYSTEM = (
-    "Rewrite the user's latest message into ONE standalone web search query. "
-    "Resolve pronouns (e.g. replace 'his/it' with the actual subject). Keep proper nouns. "
-    "4-10 words. No years, no 'build/guide/tips' words, no trailing punctuation. "
-    "Output ONLY the query."
-)
-
-
-async def _rewrite_query(raw: str, context: str = "") -> str:
-    """LLM-rewrite to standalone search query."""
+async def _rewrite_query(raw: str, context: str = "") -> dict:
+    """LLM-rewrite to standalone search query with intent."""
+    current_year = datetime.now().year
+    system_prompt = (
+        f"The current year is {current_year}. "
+        "Analyze the user's message and generate a standalone web search query. "
+        "Resolve pronouns, keep proper nouns. 4-10 words. "
+        "Do NOT add past years (e.g. 2024, 2025) to the query unless explicitly requested. "
+        "Also determine the optimal search intent.\n"
+        "Output a JSON object with EXACTLY two keys:\n"
+        '- "query": the rewritten search query string.\n'
+        '- "intent": one of "wiki" (facts/entities), "media" (youtube/music/video), "opinion" (reviews/reddit), "dictionary" (definitions/translations), "documentation" (code/errors), or "general".'
+    )
+    
     if context:
         user_content = (
             f"Conversation so far:\n{context}\n\nLatest message: {raw}\nSearch query:"
@@ -242,21 +214,33 @@ async def _rewrite_query(raw: str, context: str = "") -> str:
     else:
         user_content = raw
 
-    async def _fetch(client, model) -> str | None:
+    async def _fetch(client, model) -> dict | None:
         try:
             _log.info("Query rewrite started using model %s", model)
             resp = await client.chat.completions.create(
                 model=model,
-                max_tokens=30,
+                max_tokens=60,
                 temperature=0.0,
+                response_format={"type": "json_object"},
                 messages=[
-                    {"role": "system", "content": _REWRITE_SYSTEM},
+                    {"role": "system", "content": system_prompt},
                     {"role": "user", "content": user_content},
                 ],
             )
-            raw = (resp.choices[0].message.content or "").strip()
-            _log.info("[Background] %s query rewrite completed: %r", model, raw)
-            return raw
+            raw_output = (resp.choices[0].message.content or "").strip()
+            _log.info("[Background] %s query rewrite completed: %r", model, raw_output)
+            try:
+                parsed = json.loads(raw_output)
+                return {"query": parsed.get("query", raw), "intent": parsed.get("intent", "general")}
+            except json.JSONDecodeError:
+                m = re.search(r'\{.*\}', raw_output, re.DOTALL)
+                if m:
+                    try:
+                        parsed = json.loads(m.group(0))
+                        return {"query": parsed.get("query", raw), "intent": parsed.get("intent", "general")}
+                    except json.JSONDecodeError:
+                        pass
+                return {"query": raw_output, "intent": "general"}
         except Exception as e:
             _log.warning("Query rewrite inner error for %s: %s", model, e)
             return None
@@ -273,7 +257,9 @@ async def _rewrite_query(raw: str, context: str = "") -> str:
         timeout=5.0, logger=_log, task_name="query rewrite",
         primary_name="Ollama", backup_name="NIM"
     )
-    return res if res else raw
+    if res:
+        return res
+    return {"query": raw, "intent": "general"}
 
 
 _EMBED_TIMEOUT = 6.9
@@ -337,46 +323,48 @@ async def fetch_web_context(
         _log.debug("Cache hit for %r", query)
         return cached
 
-    rewritten, _ = await asyncio.gather(
+    rewrite_res, _ = await asyncio.gather(
         _rewrite_query(query, history_context),
         _await_warmup(),
     )
+    rewritten = rewrite_res.get("query", query)
+    intent = rewrite_res.get("intent", "general")
+
     year = "" if re.search(r"\b(19|20)\d{2}\b", rewritten) else str(datetime.now().year)
 
-    site, suffix = classify(rewritten)
+    site = None
+    suffix = ""
+    wiki_entity = False
+
+    if intent == "media":
+        site = "youtube.com"
+        suffix = "video"
+    elif intent == "opinion":
+        site = "reddit.com"
+    elif intent == "dictionary":
+        site = "dictionary.cambridge.org"
+    elif intent == "documentation":
+        suffix = "documentation"
+
     seed: list[dict] = []
     if suffix == "video":
         result = await _fetch_media(rewritten, query, num_urls)
         if result[0]:
             _cache_set(cache_key, result)
         return result
+        
     api_tasks: list = []
-    wiki_entity = False
-    if site or suffix:
+    if intent == "wiki":
+        wiki_entity = True
+    elif site or suffix:
         parts = [p for p in (rewritten, suffix, year) if p]
         search_query = " ".join(parts)
-    elif wants_wiki(rewritten):
-        terms = [w.lower() for w in rewritten.split() if len(w) > 3]
-        host, probe = await _wiki_host_for(rewritten, terms)
-        mw_query = clean_query(rewritten)
-        api_query = _audio_hint(mw_query, rewritten)
-        if host:
-            site = host
-            wiki_entity = True
-            search_query = api_query
-            seed = [r for r in probe if (urlparse(r["url"]).netloc or "") == host]
-            api_tasks.append(asyncio.ensure_future(
-                mediawiki_search(host, api_query, limit=num_urls)))
-        else:
-            search_query = f"{rewritten} {year}".strip()
-        # NOTE: fandom API seed skipped — its content API returns empty extracts
-        # and page scraping is Cloudflare-blocked. Recovered via DDG instead.
     else:
-        search_query = f"{rewritten} {year}".strip()
+        parts = [rewritten, "wiki" if wiki_entity and not site else "", year]
+        search_query = " ".join(p for p in parts if p).strip()
 
-    # Allow fandom through filter — _mediawiki_fetch reads it via open API.
     found = await _ddg_search(
-        search_query, site=site, max_results=num_urls + 2, allowed=_FANDOM_ALLOW,
+        search_query, site=site, max_results=10, allowed=_FANDOM_ALLOW,
     )
     if api_tasks:
         seen_seed = {r["url"] for r in seed}
@@ -394,8 +382,8 @@ async def fetch_web_context(
         used_fallback = True
         seen = {r["url"] for r in results}
         general = await _ddg_search(
-            rewritten, site=None, max_results=num_urls + 2,
-            allowed=_FANDOM_ALLOW, max_attempts=2,
+            rewritten, site=None, max_results=12,
+            allowed=_FANDOM_ALLOW, max_attempts=4,
         )
         results += [r for r in general if r["url"] not in seen]
 
@@ -412,7 +400,8 @@ async def fetch_web_context(
         return "", debug
 
     # Lead token anchors ranking to the entity so a site-scoped search can't drift.
-    _anchor = next((w.lower() for w in search_query.split() if len(w) > 2), "")
+    _noise_words = {"wiki", "the", "and", "for", "with", "from", "site"}
+    _anchor = next((w.lower() for w in search_query.split() if len(w) > 1 and w.lower() not in _noise_words and not w.isdigit()), "")
 
     # On entity-wiki path, drop results that don't mention the entity at all.
     if wiki_entity and _anchor and len(_anchor) > 2:
@@ -443,7 +432,7 @@ async def fetch_web_context(
             return 0
         return 1
 
-    # Relevance gate: require half the query terms repeated >=3x.
+    # Relevance gate: require half the query terms repeated >= 1x.
     _noise = {"wiki", "documentation", "reddit", "guide"}
     _terms = [
         w.lower() for w in search_query.split()
@@ -456,9 +445,9 @@ async def fetch_web_context(
             return True
         cl = content.lower()
         # Require the anchor entity itself to avoid generic franchise term matches.
-        if _anchor and len(_anchor) > 3 and cl.count(_anchor) < 3:
+        if _anchor and _anchor not in cl:
             return False
-        return sum(cl.count(t) >= 3 for t in _terms) >= _threshold
+        return sum(t in cl for t in _terms) >= _threshold
 
     async def _fetch_one(r: dict) -> tuple[dict, str, str]:
         content, method = await fetch_content(r["url"], r["snippet"])
@@ -514,10 +503,10 @@ async def fetch_web_context(
     # rejected everything.
     if not parts:
         got = {r["url"]: content for r, content, _ok in fetched}
-        # Tier 2: any content mentioning the anchor (relaxed threshold).
+        # Tier 2: any content mentioning the anchor (relaxed threshold), or highly relevant semantically.
         for r in fetch_batch:  # priority order
             content = got.get(r["url"], "")
-            if content.strip() and (not _anchor or _anchor in content.lower()):
+            if content.strip() and (not _anchor or _anchor in content.lower() or r.get("score", 0.0) > 0.4):
                 parts.append(f"Source: {r['url']}\n{content}")
                 if len(parts) >= num_urls:
                     break
@@ -527,13 +516,24 @@ async def fetch_web_context(
         # Tier 3: DDG snippets as last resort (>= 40 chars).
         snips = [(r, (r.get("snippet") or "").strip()) for r in fetch_batch]
         snips = [(r, s) for r, s in snips if len(s) >= 40]
-        on_entity = [(r, s) for r, s in snips if not _anchor or _anchor in s.lower()]
+        on_entity = [(r, s) for r, s in snips if not _anchor or _anchor in s.lower() or r.get("score", 0.0) > 0.4]
         for r, s in (on_entity or snips):
             parts.append(f"Source: {r['url']}\n{s}")
             if len(parts) >= num_urls:
                 break
         if parts:
             debug["degraded"] = "snippet"
+            
+    if not parts:
+        # Tier 4: literally any snippet or title we have. Guaranteed context if search returned *anything*.
+        for r in results:
+            s = (r.get("snippet") or r.get("title") or "").strip()
+            if s:
+                parts.append(f"Source: {r['url']}\n{s}")
+                if len(parts) >= num_urls:
+                    break
+        if parts:
+            debug["degraded"] = "any_snippet"
 
     if not parts:
         return "", debug

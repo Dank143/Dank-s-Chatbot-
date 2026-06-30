@@ -34,6 +34,7 @@ class SendMessageBody(BaseModel):
     web_search: bool = False
     client_time: str | None = None
     skip_user_save: bool = False
+    duo_side: int = 0
 
 
 class SaveAssistantBody(BaseModel):
@@ -45,6 +46,7 @@ class RegenerateBody(BaseModel):
     web_search: bool = False
     client_time: str | None = None
     overwrite_message_id: str | None = None
+    duo_side: int = 0
 
 
 class VerifyKeyBody(BaseModel):

@@ -17,6 +17,7 @@ A self-hosted AI chat interface powered by [NVIDIA NIM](https://build.nvidia.com
 
 - **Multi-provider** — switch between NVIDIA NIM and Ollama (or any OpenAI-compatible endpoint) via a pill toggle
 - **Multi-model support** — switch models mid-conversation; full history is always passed to the new model
+- **Duo Mode** — chat with two models simultaneously side-by-side to compare responses; supports independent scrolling and synchronized retries
 - **Streaming responses** with real-time token rendering and a **stop button** to cancel generation at any time
 - **Persistent chat history** — all conversations stored in a local SQLite database
 - **Starred / recent chats** in a collapsible sidebar; auto-titles chats from the first message
@@ -204,6 +205,17 @@ Each model entry carries a `stats` block that drives the stat bars shown in the 
 | **A**ccuracy | Likelihood of producing factually correct, contextually appropriate, and instruction-faithful answers **without web search**. Reflects how well the model avoids hallucinations, stays on topic, and interprets nuanced prompts correctly. Choose a high-accuracy model when correctness matters more than speed. |
 | **L**atency | How quickly the model answers. Combines time-to-first-token and tokens-per-second with NIM serving responsiveness. A model that is usually fast but occasionally stalls scores lower than one that is steadily quick. Flash and smaller models lead here; bigger models trade latency for depth. |
 | **M**astery | Overall knowledge and capability, with the depth of pre-trained world knowledge plus specialized skills like coding, math, structured extraction, and multimodal understanding. Vision-capable models score higher than text-only equivalents; a model that sees, reads, and reasons across modalities earns a higher ceiling than one confined to text alone. |
+
+---
+
+## Duo Mode (Split-Screen)
+
+Duo Mode allows you to chat with **two different models simultaneously**, placing their responses side-by-side in a split-screen layout. This is incredibly useful for comparing model outputs, verifying facts, or seeing how different reasoning engines tackle complex logic.
+
+- **Concurrent Streaming**: When you send a prompt, the frontend fires off both requests over HTTP/2 concurrently. The FastAPI backend processes them entirely in parallel, meaning generation speed is **not limited or throttled** by using two models at once (unless you are running two local Ollama models on a single GPU without parallelization configured).
+- **Independent Scrolling**: Each model's response (including its `<think>` process) is contained in its own independently scrollable wrapper. One model generating a massive wall of text will not stretch or break the layout of the other.
+- **Synchronized Retries**: If you stop a generation midway or if both finish, a central **"Retry Both"** button appears between the columns to instantly wipe and regenerate both responses. Alternatively, you can click the individual retry icon on a specific model to isolate the regeneration to just that side.
+- **Persistent State**: Duo mode rows are saved directly into the chat history. When you reopen a past chat, the split-screen layout, independent models, and the "Retry Both" button are fully restored.
 
 ---
 

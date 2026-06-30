@@ -38,10 +38,12 @@ export function searchIndicatorHtml(query) {
 }
 
 // Render a user or assistant message bubble (streaming=true adds cursor placeholder).
-export function appendMessage(msg, streaming = false) {
+export function appendMessage(msg, streaming = false, container = null) {
+  const target = container || messagesEl;
   const wrapper = document.createElement('div');
   wrapper.className = `message-wrapper ${msg.role}`;
   if (msg.id) wrapper.dataset.msgId = msg.id;
+  if (msg.model) wrapper.dataset.model = msg.model;
 
   if (msg.role === 'user') {
     const att = msg.attachments ? JSON.parse(msg.attachments) : {};
@@ -100,7 +102,7 @@ export function appendMessage(msg, streaming = false) {
     if (toggle) toggle.addEventListener('click', () => toggle.closest('.think-block').classList.toggle('expanded'));
   }
 
-  messagesEl.appendChild(wrapper);
+  target.appendChild(wrapper);
   scrollToBottom();
   return wrapper;
 }
@@ -312,20 +314,45 @@ export async function editMessage(btn) {
     beginStreaming();
 
     const attJson = (images.length || docs.length) ? JSON.stringify({ images, documents: docs }) : null;
-    const userWrapper = appendMessage({ role: 'user', content: newContent, attachments: attJson });
-    const assistantWrapper = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true);
+    
+    if (state.duoMode && state.selectedModel2) {
+      const userWrapper = appendMessage({ role: 'user', content: newContent, attachments: attJson });
+      userWrapper.classList.add('duo');
+      const row = document.createElement('div');
+      row.className = 'duo-message-row';
+      messagesEl.appendChild(row);
 
-    await streamAssistant(
-      `/api/chats/${state.activeChatId}/messages`,
-      {
-        content: newContent, model: state.selectedModel,
+      const asstWrapperL = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true, row);
+      const asstWrapperR = appendMessage({ role: 'assistant', content: '', model: state.selectedModel2 }, true, row);
+
+      const bodyBase = {
+        content: newContent,
         images: images.length ? images : undefined,
         documents: docs.length ? docs : undefined,
         web_search: state.webSearch || needsWebSearch(newContent) || undefined,
         client_time: clientTime()
-      },
-      userWrapper, assistantWrapper
-    );
+      };
+
+      await Promise.all([
+        streamAssistant(`/api/chats/${state.activeChatId}/messages`, { ...bodyBase, model: state.selectedModel }, userWrapper, asstWrapperL),
+        streamAssistant(`/api/chats/${state.activeChatId}/messages`, { ...bodyBase, model: state.selectedModel2, skip_user_save: true }, null, asstWrapperR),
+      ]);
+    } else {
+      const userWrapper = appendMessage({ role: 'user', content: newContent, attachments: attJson });
+      const assistantWrapper = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true);
+
+      await streamAssistant(
+        `/api/chats/${state.activeChatId}/messages`,
+        {
+          content: newContent, model: state.selectedModel,
+          images: images.length ? images : undefined,
+          documents: docs.length ? docs : undefined,
+          web_search: state.webSearch || needsWebSearch(newContent) || undefined,
+          client_time: clientTime()
+        },
+        userWrapper, assistantWrapper
+      );
+    }
 
     endStreaming();
     updateSendBtn();
@@ -337,33 +364,54 @@ export async function retryMessage(btn) {
   if (state.streaming) return;
   const wrapper = btn.closest('.message-wrapper');
   const msgId = wrapper.dataset.msgId;
+  const model = wrapper.dataset.model || state.selectedModel;
+
   if (!msgId) {
     await (await import('./chat.js')).openChat(state.activeChatId);
     return;
   }
 
-  await deleteFrom(wrapper, msgId);
+  // Delete future turns (but keep current turn intact to preserve siblings in duo mode)
+  const row = wrapper.closest('.duo-message-row');
+  const nextNode = (row || wrapper).nextElementSibling;
+  
+  if (nextNode) {
+     const targetForDelete = nextNode.classList.contains('message-wrapper') ? nextNode : nextNode.querySelector('.message-wrapper');
+     if (targetForDelete && targetForDelete.dataset.msgId) {
+        await deleteFrom(targetForDelete, targetForDelete.dataset.msgId);
+     }
+  }
 
   // Mirror send/edit: honor web-search toggle or auto-detect.
   const lastUser = [...messagesEl.querySelectorAll('.message-wrapper.user .bubble')].pop();
-  const lastUserText = lastUser ? lastUser.textContent.trim() : '';
+  const lastUserText = lastUser ? (lastUser.dataset.raw || lastUser.textContent.trim()) : '';
 
   beginStreaming();
 
-  const assistantWrapper = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true);
-
+  // Reset the wrapper for streaming
+  const bubble = wrapper.querySelector('.bubble');
+  bubble.innerHTML = '<div class="streaming-cursor"></div>';
+  bubble.dataset.raw = '';
+  
+  const existingActions = wrapper.querySelector('.message-actions');
+  if (existingActions) existingActions.remove();
+  
+  // Notice we use overwrite_message_id instead of deleting the message entirely
   await streamAssistant(
     `/api/chats/${state.activeChatId}/regenerate`,
     {
-      model: state.selectedModel,
+      model: model,
       web_search: state.webSearch || needsWebSearch(lastUserText) || undefined,
-      client_time: clientTime()
+      client_time: clientTime(),
+      overwrite_message_id: msgId
     },
-    null, assistantWrapper
+    null, wrapper
   );
 
   endStreaming();
-  sendBtn.disabled = !$('messageInput').value.trim();
+  updateSendBtn();
+  const sendBtn = $('sendBtn');
+  if (sendBtn) sendBtn.disabled = !$('messageInput').value.trim();
   $('messageInput').focus();
   await (await import('./chat.js')).loadChats();
 }

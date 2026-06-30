@@ -52,7 +52,7 @@
   flex-direction: column;
   align-items: center;
   gap: 8px;
-  padding-top: 12px;
+  padding-top: 8px;
   opacity: 0;
   pointer-events: none;
   transition: opacity 0.2s ease;
@@ -127,7 +127,7 @@
   transition: background var(--transition), border-color var(--transition);
   white-space: nowrap;
 }
-.new-chat-btn:hover { background: rgba(6,182,212,.22); }
+.new-chat-btn:hover { background: rgba(6, 136, 212, 0.288); }
 
 .chat-list-wrapper {
   flex: 1;
@@ -256,6 +256,68 @@
   position: relative;
   background: var(--bg);
   transition: background var(--transition);
+}
+
+/* ── Duo Message Row (Mixed History) ─────────────────────────────── */
+.duo-message-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  width: 100%;
+  position: relative;
+}
+
+.duo-message-row::before {
+  content: "";
+  position: absolute;
+  top: 8px; bottom: 24px; left: 50%;
+  border-left: 1px solid var(--border-input);
+}
+
+.duo-message-row > .message-wrapper {
+  margin: 0;
+  border-bottom: none;
+}
+
+.duo-message-row > .message-wrapper:first-child {
+  border-right: none;
+  justify-self: end;
+  margin-left: auto;
+  margin-right: 0;
+  padding-left: 48px;
+  padding-right: 48px;
+}
+
+.duo-message-row > .message-wrapper:last-child {
+  justify-self: start;
+  margin-left: 0;
+  margin-right: auto;
+  padding-left: 48px;
+  padding-right: 48px;
+}
+
+@media (max-width: 768px) {
+  .duo-message-row {
+    grid-template-columns: 1fr;
+  }
+  .duo-message-row::before {
+    display: none;
+  }
+  .duo-message-row > .message-wrapper:first-child {
+    justify-self: center;
+    padding-left: 24px;
+    padding-right: 24px;
+    border-bottom: 1px solid var(--border-input);
+  }
+  .duo-message-row > .message-wrapper:last-child {
+    justify-self: center;
+    padding-left: 24px;
+    padding-right: 24px;
+  }
+}
+
+/* Center user prompt if it was sent in Duo Mode */
+.message-wrapper.user.duo {
+  align-items: center;
 }
 
 /* chat-mode input overlays bottom so .messages fills full height

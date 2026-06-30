@@ -16,10 +16,10 @@ defaults:
 default_model_nim: openai/gpt-oss-120b
 default_model_ollama: gpt-oss:120b-cloud
 
-title_model_nim: google/gemma-4-31b-it
+title_model_nim: qwen/qwen3-next-80b-a3b-instruct
 title_model_ollama: gemma4:31b-cloud
 
-rewrite_model_nim: google/gemma-4-31b-it
+rewrite_model_nim: qwen/qwen3-next-80b-a3b-instruct
 rewrite_model_ollama: gemma4:31b-cloud
 
 embed_model_nim: nvidia/nv-embedqa-e5-v5
@@ -39,7 +39,7 @@ models_nim:
   - { id: meta/llama-3.1-8b-instruct,                     name: "Llama 3.1 8B",               icon: "meta-color.png",       stats: {consistency: 7, accuracy: 5, latency: 10, mastery: 5} }
 
   # MiniMax
-  - { id: minimaxai/minimax-m3,                           name: "MiniMax M3*",                icon: "minimax-color.png",    stats: {consistency: 5, accuracy: 8, latency: 5, mastery: 8} }
+  # - { id: minimaxai/minimax-m3,                           name: "MiniMax M3*",                icon: "minimax-color.png",    stats: {consistency: 5, accuracy: 8, latency: 5, mastery: 8} }
   - { id: minimaxai/minimax-m2.7,                         name: "MiniMax M2.7",               icon: "minimax-color.png",    stats: {consistency: 8, accuracy: 7, latency: 8, mastery: 7} }
 
   # Mistral
@@ -53,16 +53,16 @@ models_nim:
   - { id: moonshotai/kimi-k2.6,                           name: "Kimi K2.6*",                 icon: "moonshot.png",         stats: {consistency: 8, accuracy: 8, latency: 9, mastery: 10} }
 
   # NVIDIA
+  - { id: nvidia/nemotron-3-ultra-550b-a55b,              name: "Nemotron 3 Ultra",           icon: "nvidia-color.png",     stats: {consistency: 7, accuracy: 8, latency: 7, mastery: 8}  }
   - { id: nvidia/nemotron-3-super-120b-a12b,              name: "Nemotron 3 Super",           icon: "nvidia-color.png",     stats: {consistency: 6, accuracy: 7, latency: 6, mastery: 7}  }
   - { id: nvidia/nemotron-3-nano-omni-30b-a3b-reasoning,  name: "Nemotron 3 Nano*",           icon: "nvidia-color.png",     stats: {consistency: 9, accuracy: 6, latency: 9, mastery: 6}  }
-  - { id: nvidia/nemotron-nano-12b-v2-vl,                 name: "Nemotron Nano 12B*",         icon: "nvidia-color.png",     stats: {consistency: 7, accuracy: 5, latency: 9, mastery: 5}  }
 
   # OpenAI
   - { id: openai/gpt-oss-120b,                            name: "GPT OSS Max",                icon: "openai.png",           stats: {consistency: 8, accuracy: 8, latency: 10, mastery: 7} }
   - { id: openai/gpt-oss-20b,                             name: "GPT OSS Lite",               icon: "openai.png",           stats: {consistency: 7, accuracy: 6, latency: 9, mastery: 5} }
 
   # Qwen
-  - { id: qwen/qwen3.5-397b-a17b,                         name: "Qwen 3.5 397B",              icon: "qwen-color.png",       stats: {consistency: 5, accuracy: 8, latency: 6, mastery: 7} }
+  # - { id: qwen/qwen3.5-397b-a17b,                         name: "Qwen 3.5 397B",              icon: "qwen-color.png",       stats: {consistency: 5, accuracy: 8, latency: 6, mastery: 7} }
   - { id: qwen/qwen3.5-122b-a10b,                         name: "Qwen 3.5 122B",              icon: "qwen-color.png",       stats: {consistency: 8, accuracy: 7, latency: 8, mastery: 7} }
   - { id: qwen/qwen3-next-80b-a3b-instruct,               name: "Qwen3 Next 80B",             icon: "qwen-color.png",       stats: {consistency: 8, accuracy: 7, latency: 8, mastery: 7} }
 

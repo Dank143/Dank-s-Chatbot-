@@ -1,4 +1,4 @@
-import { state, $, dropdownList, dropdownBackdrop, modelSearch, modelSelectorLbl, escHtml } from './state.js';
+import { state, $, dropdownList, dropdownBackdrop, modelSearch, modelSelectorLbl, duoModelSelectorLbl, escHtml } from './state.js';
 import { api } from './api.js';
 
 const PROVIDER_NAMES = {
@@ -107,6 +107,24 @@ export function updateModelLabel() {
   }
 }
 
+export function updateDuoModelLabel() {
+  const m = state.models.find((x) => x.id === state.selectedModel2)
+         || state.modelsNim?.find((x) => x.id === state.selectedModel2)
+         || state.modelsOllama?.find((x) => x.id === state.selectedModel2);
+  const lbl = $('duoModelSelectorLabel');
+  if (lbl) lbl.textContent = m ? m.name : state.selectedModel2 || 'Pick model…';
+  const badgeEl = $('duoModelSelectorBadge');
+  if (badgeEl && m) {
+    const icon = m.icon || null;
+    Object.assign(badgeEl.style, {
+      background: icon ? 'transparent' : '#06b6d4', color: icon ? '#333' : '#fff',
+      width: '16px', height: '16px', fontSize: '7px', display: '',
+      borderRadius: ''
+    });
+    badgeEl.innerHTML = badgeInner(icon, badgeLabel(m, m.id), 11);
+  }
+}
+
 export function renderDropdownList(models) {
   dropdownList.innerHTML = '';
   const groups = {};
@@ -124,7 +142,8 @@ export function renderDropdownList(models) {
     grid.className = 'model-grid';
     groups[provider].forEach(m => {
       const card = document.createElement('div');
-      card.className = 'model-card' + (m.id === state.selectedModel ? ' selected' : '');
+      const activeModel = state._pickingSlot === 'right' ? state.selectedModel2 : state.selectedModel;
+      card.className = 'model-card' + (m.id === activeModel ? ' selected' : '');
 
       // Single color bar (swap comment blocks for gradient).
       const STAT_COLOR = '#0088FF';
@@ -156,6 +175,10 @@ export function renderDropdownList(models) {
 }
 
 export function selectModel(id) {
+  if (state._pickingSlot === 'right') {
+    selectModel2(id);
+    return;
+  }
   state.selectedModel = id;
   updateModelLabel();
   closeDropdown();
@@ -167,6 +190,17 @@ export function selectModel(id) {
   if (state.activeChatId) {
     api(`/chats/${state.activeChatId}`, { method: 'PATCH', body: { model: id } }).catch(() => { });
   }
+}
+
+export function selectModel2(id) {
+  state.selectedModel2 = id;
+  updateDuoModelLabel();
+  closeDropdown();
+  // Warm the newly selected model.
+  fetch('/api/warmup', {
+    method: 'POST', headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ model: id }),
+  }).catch(() => { });
 }
 
 export function openDropdown() {
@@ -192,6 +226,7 @@ export function openDropdown() {
 
 export function closeDropdown() {
   dropdownBackdrop.style.display = 'none';
+  state._pickingSlot = 'left';
 }
 
 import { setProvider, updateSendBtn } from './state.js';

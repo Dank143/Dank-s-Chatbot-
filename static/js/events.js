@@ -1,9 +1,10 @@
 import {
   state, $,
-  messagesEl, messageInput, renameBtn, topStarBtn, topDeleteBtn, chatTitleDisplay,
+  messagesEl, inputAreaEl, messageInput, renameBtn, topStarBtn, topDeleteBtn, chatTitleDisplay,
   dropdownBackdrop, modelSearch, lightbox, lightboxImg,
-  autoResize, updateSendBtn, setWebSearch, setDebugMode, setProvider,
+  autoResize, updateSendBtn, setWebSearch, setDebugMode, setProvider, scrollToBottom,
   searchChatBtn, collapsedNewChatBtn, collapsedSearchBtn, collapsedStarBtn, collapsedRecentBtn, sidebar,
+  duoToggleBtn, duoModelSelectorBtn,
 } from './state.js';
 import { api } from './api.js';
 import { openDropdown, closeDropdown, renderDropdownList, updateModelLabel } from './models.js';
@@ -14,7 +15,7 @@ import {
 import { openSettings, closeSettings, saveSettings, updateTempSlider, setKeyStatus, refreshApiKeyWarning } from './settings.js';
 import { toggleTheme } from './theme.js';
 import {
-  sendMessage, showWelcome, openChat, loadChats, startInlineRename, toggleSidebar, confirmDialog, renderSidebar,
+  sendMessage, showWelcome, openChat, loadChats, startInlineRename, toggleSidebar, toggleDuo, confirmDialog, renderSidebar,
 } from './chat.js';
 
 function stopStreaming() {
@@ -32,6 +33,18 @@ function closeLightbox() {
 }
 
 export function setupEventListeners() {
+  const ro = new ResizeObserver(() => {
+    if (inputAreaEl.style.display !== 'none') {
+      const pad = (inputAreaEl.offsetHeight + 16) + 'px';
+      const wasAtBottom = (messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight) < 20;
+      messagesEl.style.paddingBottom = pad;
+      if (wasAtBottom) scrollToBottom();
+    } else {
+      messagesEl.style.paddingBottom = '28px';
+    }
+  });
+  ro.observe(inputAreaEl);
+
   $('newChatBtn').addEventListener('click', showWelcome);
 
   $('webSearchToggle').addEventListener('click', () => {
@@ -183,8 +196,23 @@ export function setupEventListeners() {
 
   $('modelSelectorBtn').addEventListener('click', (e) => {
     e.stopPropagation();
+    state._pickingSlot = 'left';
     dropdownBackdrop.style.display === 'none' ? openDropdown() : closeDropdown();
   });
+
+  // Duo toggle button
+  if (duoToggleBtn) {
+    duoToggleBtn.addEventListener('click', () => toggleDuo());
+  }
+
+  // Second model selector for duo mode
+  if (duoModelSelectorBtn) {
+    duoModelSelectorBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      state._pickingSlot = 'right';
+      dropdownBackdrop.style.display === 'none' ? openDropdown() : closeDropdown();
+    });
+  }
 
   dropdownBackdrop.addEventListener('click', (e) => {
     if (e.target === dropdownBackdrop) closeDropdown();

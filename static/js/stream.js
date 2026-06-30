@@ -36,7 +36,7 @@ function renderDebugPanel(wrapper, evt) {
 }
 
 // Stream SSE reply into assistant bubble: parse events, throttle markdown, handle abort.
-export async function streamAssistant(endpoint, body, userWrapper, assistantWrapper) {
+export async function streamAssistant(endpoint, body, userWrapper, assistantWrapper, onMeta = null) {
   if (!state.abortController) state.abortController = new AbortController();
   const signal = state.abortController.signal;
   // Track raw text and finalization state for abort/error handling.
@@ -100,6 +100,7 @@ export async function streamAssistant(endpoint, body, userWrapper, assistantWrap
         const evt = JSON.parse(line.slice(6));
         if (evt.type === 'meta') {
           if (userWrapper && evt.user_msg_id) userWrapper.dataset.msgId = evt.user_msg_id;
+          if (onMeta) onMeta(evt.user_msg_id);
         } else if (evt.type === 'searching') {
           if (streamBubble) {
             streamBubble.querySelector('.thinking-indicator')?.remove();
@@ -258,7 +259,5 @@ export async function streamAssistant(endpoint, body, userWrapper, assistantWrap
     } else {
       showMessageError(assistantWrapper, err.message);
     }
-  } finally {
-    state.abortController = null;
   }
 }

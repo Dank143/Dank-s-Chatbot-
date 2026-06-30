@@ -6,7 +6,7 @@
   --bg:           #111822;
   --bg-sidebar:   #0c121c;
   --bg-input:     #19212f;
-  --bg-hover:     #1b2637;
+  --bg-hover:     #1c2b3a;
   --bg-active:    #213046;
   --bg-msg-user:  #1b2637;
   --bg-dropdown:  #112233;
@@ -21,8 +21,8 @@
 
   --accent:       #06b6d4;
   --accent-2:     #0891b2;
-  --accent-dim:   rgba(6,182,212,.13);
-  --accent-border:rgba(6,182,212,.28);
+  --accent-dim:   rgba(25, 140, 250, 0.14);
+  --accent-border:rgba(99, 102, 241, 0.35);
 
   --code-inline:  #67e8f9;
 

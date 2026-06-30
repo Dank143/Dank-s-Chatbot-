@@ -31,14 +31,20 @@ def _fallback_title(text: str) -> str:
     return text[:60].strip() + ("…" if len(text) > 60 else "")
 
 
-async def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None", model: "str | None" = None) -> None:
+async def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None", model: "str | None" = None, overwrite: bool = False) -> None:
     """Persist an assistant message, bump the chat, and optionally set its title."""
     def _task(conn):
         ts = now_iso()
-        conn.execute(
-            "INSERT INTO messages (id, chat_id, role, content, created_at, model) VALUES (?,?,?,?,?,?)",
-            (msg_id, chat_id, "assistant", content, ts, model),
-        )
+        if overwrite:
+            conn.execute(
+                "UPDATE messages SET content=?, model=? WHERE id=?",
+                (content, model, msg_id)
+            )
+        else:
+            conn.execute(
+                "INSERT INTO messages (id, chat_id, role, content, created_at, model) VALUES (?,?,?,?,?,?)",
+                (msg_id, chat_id, "assistant", content, ts, model),
+            )
         conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (ts, chat_id))
         if title:
             conn.execute("UPDATE chats SET title=? WHERE id=?", (title, chat_id))
@@ -145,10 +151,11 @@ async def send_message(chat_id: str, body: SendMessageBody):
         chat = dict(chat)
         model: str = str(body.model or chat["model"] or cfg.get("default_model") or "")
         ts = now_iso()
-        conn.execute(
-            "INSERT INTO messages (id, chat_id, role, content, created_at, attachments, model) VALUES (?,?,?,?,?,?,?)",
-            (user_msg_id, chat_id, "user", body.content, ts, att_json, model),
-        )
+        if not body.skip_user_save:
+            conn.execute(
+                "INSERT INTO messages (id, chat_id, role, content, created_at, attachments, model) VALUES (?,?,?,?,?,?,?)",
+                (user_msg_id, chat_id, "user", body.content, ts, att_json, model),
+            )
         conn.execute("UPDATE chats SET model=?, updated_at=? WHERE id=?", (model, ts, chat_id))
         history = conn.execute(
             "SELECT role, content, attachments FROM messages WHERE chat_id=? ORDER BY created_at", (chat_id,)
@@ -295,9 +302,17 @@ async def regenerate_response(chat_id: str, body: RegenerateBody):
             raise HTTPException(404, "Chat not found")
         chat = dict(chat)
         model: str = str(body.model or chat["model"] or cfg.get("default_model") or "")
-        history = conn.execute(
-            "SELECT role, content, attachments FROM messages WHERE chat_id=? ORDER BY created_at", (chat_id,)
-        ).fetchall()
+        history_query = "SELECT role, content, attachments FROM messages WHERE chat_id=?"
+        params = [chat_id]
+        if body.overwrite_message_id:
+            # When overwriting, the history is everything before the message being overwritten
+            target_msg = conn.execute("SELECT created_at FROM messages WHERE id=?", (body.overwrite_message_id,)).fetchone()
+            if target_msg:
+                history_query += " AND created_at < ?"
+                params.append(target_msg["created_at"])
+        
+        history_query += " ORDER BY created_at"
+        history = conn.execute(history_query, tuple(params)).fetchall()
         return model, history
 
     model, history = await run_db_task(_read)
@@ -312,7 +327,7 @@ async def regenerate_response(chat_id: str, body: RegenerateBody):
     last_user = next((m["content"] for m in reversed(history) if m["role"] == "user"), "")
 
     async def stream_response():
-        asst_msg_id = str(uuid.uuid4())
+        asst_msg_id = body.overwrite_message_id or str(uuid.uuid4())
 
         if body.web_search and last_user:
             ctx_turns = [m for m in history if m["content"]][:-1][-6:]
@@ -346,7 +361,7 @@ async def regenerate_response(chat_id: str, body: RegenerateBody):
         if not result["content"].strip():
             yield f"data: {json.dumps({'type': 'error', 'message': 'The model returned an empty response. Please try again.'})}\n\n"
             return
-        await _save_assistant(chat_id, asst_msg_id, result["content"], None, model)
+        await _save_assistant(chat_id, asst_msg_id, result["content"], None, model, overwrite=bool(body.overwrite_message_id))
         yield f"data: {json.dumps({'type': 'done', 'asst_msg_id': asst_msg_id, 'finish_reason': result.get('finish_reason')})}\n\n"
 
     return StreamingResponse(stream_response(), media_type="text/event-stream", headers=_SSE_HEADERS)

@@ -4,12 +4,14 @@ from pydantic import BaseModel
 class CreateChatBody(BaseModel):
     title: str = "New Chat"
     model: str | None = None
+    duo_mode: bool | None = None
 
 
 class UpdateChatBody(BaseModel):
     title: str | None = None
     model: str | None = None
     starred: bool | None = None
+    duo_mode: bool | None = None
 
 
 class UpdateSettingsBody(BaseModel):
@@ -31,6 +33,7 @@ class SendMessageBody(BaseModel):
     documents: list[DocumentAttachment] | None = None
     web_search: bool = False
     client_time: str | None = None
+    skip_user_save: bool = False
 
 
 class SaveAssistantBody(BaseModel):
@@ -41,6 +44,7 @@ class RegenerateBody(BaseModel):
     model: str | None = None
     web_search: bool = False
     client_time: str | None = None
+    overwrite_message_id: str | None = None
 
 
 class VerifyKeyBody(BaseModel):

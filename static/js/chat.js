@@ -6,10 +6,11 @@ import {
   escHtml, autoResize, updateSendBtn, setWebSearch, needsWebSearch,
   clientTime, beginStreaming, endStreaming, setProvider,
   topStarBtn, topDeleteBtn,
+  duoToggleBtn, duoModelSelectorBtn, duoModelSep,
 } from './state.js';
 import { api } from './api.js';
 import { clearPendingFiles } from './files.js';
-import { updateModelLabel } from './models.js';
+import { updateModelLabel, updateDuoModelLabel } from './models.js';
 import { appendMessage } from './messages.js';
 import { streamAssistant } from './stream.js';
 
@@ -319,13 +320,69 @@ export async function openChat(chatId) {
   inputAreaEl.style.display = 'flex';
   messagesEl.innerHTML = '';
 
-  chat.messages.forEach((msg) => appendMessage(msg));
+  state.duoMode = chat.duo_mode === 1;
+  document.querySelector('.main').classList.toggle('duo-mode', state.duoMode);
+  duoModelSep.style.display = state.duoMode ? '' : 'none';
+  duoModelSelectorBtn.style.display = state.duoMode ? '' : 'none';
+  duoToggleBtn.classList.toggle('active', state.duoMode);
+  let lastModel1 = null;
+  let lastModel2 = null;
+
+  let i = 0;
+  while (i < chat.messages.length) {
+    const msg = chat.messages[i];
+    if (msg.role === 'assistant' && i + 1 < chat.messages.length && chat.messages[i+1].role === 'assistant') {
+      const row = document.createElement('div');
+      row.className = 'duo-message-row';
+      messagesEl.appendChild(row);
+      appendMessage(msg, false, row);
+      appendMessage(chat.messages[i+1], false, row);
+      lastModel1 = msg.model;
+      lastModel2 = chat.messages[i+1].model;
+      i += 2;
+      continue;
+    }
+    if (msg.role === 'assistant') {
+      lastModel1 = msg.model;
+      lastModel2 = null;
+    }
+    if (msg.role === 'user') {
+      let isDuo = false;
+      if (i + 1 < chat.messages.length && chat.messages[i+1].role === 'assistant' && 
+          i + 2 < chat.messages.length && chat.messages[i+2].role === 'assistant') {
+        isDuo = true;
+      }
+      const wrapper = appendMessage(msg);
+      if (isDuo) wrapper.classList.add('duo');
+      i++;
+      continue;
+    }
+    appendMessage(msg);
+    i++;
+  }
+
+  // Restore the models in the UI selectors from the last conversation turn
+  if (lastModel1) {
+    state.selectedModel = lastModel1;
+    updateModelLabel();
+  }
+  if (state.duoMode) {
+    if (lastModel2) {
+      state.selectedModel2 = lastModel2;
+    } else if (!state.selectedModel2) {
+      state.selectedModel2 = state.selectedModel;
+    }
+    updateDuoModelLabel();
+  }
+
   messageInput.focus();
 }
 
 export async function createNewChat() {
-
-  const chat = await api('/chats', { method: 'POST', body: { model: state.selectedModel } });
+  const chat = await api('/chats', { 
+    method: 'POST', 
+    body: { model: state.selectedModel, duo_mode: state.duoMode } 
+  });
   state.chats.unshift(chat);
   if (state.webSearch) localStorage.setItem(`webSearch_${chat.id}`, '1');
   await openChat(chat.id);
@@ -349,6 +406,13 @@ export function showWelcome() {
   } else {
     state.selectedModel = state.defaultModel;
   }
+  
+  state.duoMode = false;
+  document.querySelector('.main').classList.toggle('duo-mode', false);
+  duoModelSep.style.display = 'none';
+  duoModelSelectorBtn.style.display = 'none';
+  duoToggleBtn.classList.remove('active');
+  
   setWebSearch(false);
   clearPendingFiles();
   updateModelLabel();
@@ -383,19 +447,54 @@ export async function sendMessage() {
   const attJson = (images.length || documents.length)
     ? JSON.stringify({ images, documents })
     : null;
-  const userWrapper = appendMessage({ role: 'user', content, attachments: attJson });
-  const assistantWrapper = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true);
 
-  await streamAssistant(
-    `/api/chats/${state.activeChatId}/messages`,
-    { content, model: state.selectedModel,
+  if (state.duoMode && state.selectedModel2) {
+    // ── Duo mode: stream both models in parallel ──
+    const userWrapper = appendMessage({ role: 'user', content, attachments: attJson });
+    userWrapper.classList.add('duo');
+    const row = document.createElement('div');
+    row.className = 'duo-message-row';
+    messagesEl.appendChild(row);
+
+    const asstWrapperL = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true, row);
+    const asstWrapperR = appendMessage({ role: 'assistant', content: '', model: state.selectedModel2 }, true, row);
+
+    const bodyBase = {
+      content,
       images: images.length ? images : undefined,
       documents: documents.length ? documents : undefined,
       web_search: state.webSearch || needsWebSearch(content) || undefined,
-      client_time: clientTime() },
-    userWrapper,
-    assistantWrapper
-  );
+      client_time: clientTime(),
+    };
+
+    await Promise.all([
+      streamAssistant(
+        `/api/chats/${state.activeChatId}/messages`,
+        { ...bodyBase, model: state.selectedModel },
+        userWrapper, asstWrapperL
+      ),
+      streamAssistant(
+        `/api/chats/${state.activeChatId}/messages`,
+        { ...bodyBase, model: state.selectedModel2, skip_user_save: true },
+        null, asstWrapperR
+      ),
+    ]);
+  } else {
+    // ── Normal single-model path ──
+    const userWrapper = appendMessage({ role: 'user', content, attachments: attJson });
+    const assistantWrapper = appendMessage({ role: 'assistant', content: '', model: state.selectedModel }, true);
+
+    await streamAssistant(
+      `/api/chats/${state.activeChatId}/messages`,
+      { content, model: state.selectedModel,
+        images: images.length ? images : undefined,
+        documents: documents.length ? documents : undefined,
+        web_search: state.webSearch || needsWebSearch(content) || undefined,
+        client_time: clientTime() },
+      userWrapper,
+      assistantWrapper
+    );
+  }
 
   endStreaming();
   updateSendBtn();
@@ -464,4 +563,28 @@ export function toggleSidebar() {
   localStorage.setItem('sidebarCollapsed', sidebar.classList.contains('collapsed') ? '1' : '0');
 }
 
+export function toggleDuo() {
+  state.duoMode = !state.duoMode;
+  const main = document.querySelector('.main');
+  main.classList.toggle('duo-mode', state.duoMode);
+
+  // Show/hide second model selector in input bar
+  duoModelSep.style.display          = state.duoMode ? '' : 'none';
+  duoModelSelectorBtn.style.display  = state.duoMode ? '' : 'none';
+
+  duoToggleBtn.classList.toggle('active', state.duoMode);
+
+  if (state.activeChatId) {
+    api(`/chats/${state.activeChatId}`, { 
+      method: 'PATCH', 
+      body: { duo_mode: state.duoMode } 
+    }).catch(() => {});
+  }
+
+  // Seed model2 if not set
+  if (state.duoMode && !state.selectedModel2) {
+    state.selectedModel2 = state.selectedModel;
+    updateDuoModelLabel();
+  }
+}
 

@@ -300,3 +300,28 @@ textarea#messageInput::-webkit-scrollbar-thumb { background: var(--border-input)
 .welcome textarea#messageInput { min-height: 50px; }
 
 .model-selector-btn:disabled { opacity: 0.5; cursor: not-allowed; }
+
+/* ── Duo Chat toggle button ──────────────────────────────────────── */
+.duo-toggle-btn.active {
+  color: var(--accent);
+}
+
+.duo-toggle-btn.active:hover {
+  background: var(--bg-hover);
+}
+
+/* ── Duo "vs" separator between model selectors ──────────────────── */
+.duo-model-sep {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .05em;
+  padding: 0 2px;
+  user-select: none;
+}
+
+/* ── Second model selector (mirrors primary) ─────────────────────── */
+.duo-model-selector-btn {
+  max-width: 210px;
+}

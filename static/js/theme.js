@@ -1,7 +1,7 @@
 import { $ } from './state.js';
 
 export function loadTheme() {
-  applyTheme(localStorage.getItem('theme') || 'dark');
+  applyTheme(localStorage.getItem('theme') || 'light');
 }
 
 export function applyTheme(theme) {

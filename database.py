@@ -27,7 +27,8 @@ def init_db():
                 model      TEXT,
                 starred    INTEGER NOT NULL DEFAULT 0,
                 created_at TEXT NOT NULL,
-                updated_at TEXT NOT NULL
+                updated_at TEXT NOT NULL,
+                duo_mode   INTEGER NOT NULL DEFAULT 0
             );
             CREATE TABLE IF NOT EXISTS messages (
                 id          TEXT PRIMARY KEY,
@@ -48,6 +49,11 @@ def init_db():
         # Migration: add model column if missing.
         try:
             conn.execute("ALTER TABLE messages ADD COLUMN model TEXT")
+        except sqlite3.OperationalError:
+            pass
+        # Migration: add duo_mode column if missing.
+        try:
+            conn.execute("ALTER TABLE chats ADD COLUMN duo_mode INTEGER NOT NULL DEFAULT 0")
         except sqlite3.OperationalError:
             pass
 

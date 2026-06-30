@@ -29,10 +29,10 @@ def get_client(provider: str) -> AsyncOpenAI:
     return _client_cache[key]
 
 
-_CREATOR_KEYWORDS_EN = {} # {"creator", "maker", "developer", "father", "daddy"}
+_CREATOR_KEYWORDS_EN = {"??:D??"} # {"creator", "maker", "developer", "father", "daddy"}
 _CREATOR_RESPONSE_EN = "ALL HAIL MISTER DANG! WOOOOOO BABIIIIII!"
 
-_CREATOR_PHRASES_VI = [] # ["tạo ra", "làm ra", "code ra", "thiết kế", "nhà sáng tạo", "cha đẻ", "ông trùm"]
+_CREATOR_PHRASES_VI = ["??:D??"] # ["tạo ra", "làm ra", "code ra", "thiết kế", "nhà sáng tạo", "cha đẻ", "ông trùm"]
 _CREATOR_RESPONSE_VI = "QUÝ NGÀI ĐĂNG VĨ ĐẠI. SIUUUUUU!"
 
 
@@ -40,7 +40,7 @@ def is_asking_about_creator(text: str) -> str | None:
     """Canned hail response if the text asks who made the bot, else None."""
     if any(p in text.lower() for p in _CREATOR_PHRASES_VI):
         return _CREATOR_RESPONSE_VI
-    pattern = r'\byour\s+(?:' + '|'.join(_CREATOR_KEYWORDS_EN) + r')\b'
+    pattern = r'\byour\s+(?:' + '|'.join(re.escape(k) for k in _CREATOR_KEYWORDS_EN) + r')\b'
     if re.search(pattern, text, re.IGNORECASE):
         return _CREATOR_RESPONSE_EN
     return None

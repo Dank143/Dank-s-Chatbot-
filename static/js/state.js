@@ -11,6 +11,9 @@ export const state = {
   defaultModel: null,
   streaming: false,
   abortController: null,
+  duoMode: false,
+  selectedModel2: null,
+  _pickingSlot: 'left',
   pendingFiles: [],
   webSearch: false,
   debugMode: false,
@@ -55,6 +58,11 @@ export const topDeleteBtn     = $('topDeleteBtn');
 export const sidebar          = $('sidebar');
 export const searchChatBtn    = $('searchChatBtn');
 
+export const duoToggleBtn        = $('duoToggleBtn');
+export const duoModelSelectorBtn = $('duoModelSelectorBtn');
+export const duoModelSelectorLbl = $('duoModelSelectorLabel');
+export const duoModelSep         = $('duoModelSep');
+
 export const collapsedNewChatBtn = document.getElementById('collapsedNewChatBtn');
 export const collapsedSearchBtn = document.getElementById('collapsedSearchBtn');
 export const collapsedStarBtn = document.getElementById('collapsedStarBtn');
@@ -72,7 +80,9 @@ export function escHtml(str = '') {
 }
 export const escAttr = escHtml;
 
-export function scrollToBottom() { messagesEl.scrollTop = messagesEl.scrollHeight; }
+export function scrollToBottom() {
+  messagesEl.scrollTop = messagesEl.scrollHeight;
+}
 
 export function autoResize() {
   messageInput.style.height = 'auto';

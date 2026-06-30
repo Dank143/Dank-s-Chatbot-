@@ -41,7 +41,7 @@
   max-width: 72%;
   background: var(--bg-msg-user);
   border: 1px solid var(--border);
-  border-radius: var(--radius) var(--radius) 4px var(--radius);
+  border-radius: var(--radius);
   padding: 11px 16px;
   font-size: 14px;
   line-height: 1.65;

@@ -12,7 +12,7 @@ router = APIRouter(prefix="/api/chats")
 @router.get("")
 async def list_chats():
     return await db_execute(
-        "SELECT id, title, model, starred, created_at, updated_at "
+        "SELECT id, title, model, starred, created_at, updated_at, duo_mode "
         "FROM chats ORDER BY starred DESC, updated_at DESC", fetch="all"
     )
 
@@ -23,13 +23,14 @@ async def create_chat(body: CreateChatBody):
     chat_id = str(uuid.uuid4())
     ts = now_iso()
     model = body.model or cfg.get("default_model")
+    duo_mode = 1 if body.duo_mode else 0
 
     await db_execute(
-        "INSERT INTO chats (id, title, model, created_at, updated_at) VALUES (?,?,?,?,?)",
-        (chat_id, body.title, model, ts, ts)
+        "INSERT INTO chats (id, title, model, created_at, updated_at, duo_mode) VALUES (?,?,?,?,?,?)",
+        (chat_id, body.title, model, ts, ts, duo_mode)
     )
     return {"id": chat_id, "title": body.title, "model": model,
-            "starred": 0, "created_at": ts, "updated_at": ts}
+            "starred": 0, "created_at": ts, "updated_at": ts, "duo_mode": duo_mode}
 
 
 @router.get("/{chat_id}")
@@ -57,6 +58,8 @@ async def update_chat(chat_id: str, body: UpdateChatBody):
             sets.append("model=?"); params.append(body.model)
         if body.starred is not None:
             sets.append("starred=?"); params.append(int(body.starred))
+        if body.duo_mode is not None:
+            sets.append("duo_mode=?"); params.append(1 if body.duo_mode else 0)
         params.append(chat_id)
         conn.execute(f"UPDATE chats SET {', '.join(sets)} WHERE id=?", params)
     await run_db_task(_task)

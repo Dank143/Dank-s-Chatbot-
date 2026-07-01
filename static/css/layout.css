@@ -264,14 +264,15 @@
   grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
   width: 100%;
   position: relative;
-  margin-bottom: 65px;
+  margin-bottom: 60px;
 }
 
 .duo-message-row::before {
   content: "";
   position: absolute;
-  top: 8px; bottom: 0px; left: 50%;
+  top: -38px; bottom: 0px; left: 50%;
   border-left: 1px solid var(--border-input);
+  z-index: 0;
 }
 
 .duo-message-row > .message-wrapper {
@@ -300,7 +301,7 @@
 }
 
 .duo-message-row > .message-wrapper .message-body {
-  max-height: 62.5vh;
+  max-height: 64vh;
   overflow-y: auto;
   scrollbar-width: thin;
   scrollbar-color: var(--border-input) transparent;
@@ -374,6 +375,14 @@
 /* Center user prompt if it was sent in Duo Mode */
 .message-wrapper.user.duo {
   align-items: center;
+}
+
+/* Mask the separator line that goes up to the user prompt */
+.message-wrapper.user.duo .message-actions {
+  background: var(--bg);
+  padding: 4px 8px 0;
+  margin-top: 0;
+  border-radius: var(--radius-sm);
 }
 
 /* chat-mode input overlays bottom so .messages fills full height

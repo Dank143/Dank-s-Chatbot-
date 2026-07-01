@@ -3,14 +3,12 @@ import json
 import logging
 import re
 import uuid
-import time
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import StreamingResponse
-from openai import AsyncOpenAI
 
-from config import load_config, provider_api, provider_for_model, _PROVIDERS
+from config import load_config, provider_for_model, _PROVIDERS
 from database import db_execute, run_db_task, now_iso
 from search import fetch_web_context, inject_web_context
 from llm import build_messages, is_asking_about_creator, llm_stream, reasoning_controls, race_models, get_client

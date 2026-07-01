@@ -6,15 +6,14 @@ import time
 import logging
 from datetime import datetime
 
-from openai import AsyncOpenAI
 from ddgs import DDGS
-from config import load_config, provider_api
+from config import load_config
 from llm import race_models, get_client
 
 from urllib.parse import urlparse, parse_qs
 
-from .classifier import clean_query
-from .fetcher import fetch_content, mediawiki_search, skip
+
+from .fetcher import fetch_content, skip
 
 _log = logging.getLogger(__name__)
 
@@ -88,13 +87,13 @@ async def _searxng_search(query: str, max_results: int = 10) -> list[dict]:
     """Primary search via self-hosted SearXNG."""
     try:
         # Strict timeout so a cold SearXNG container doesn't hang the UI for 30s.
-        async with httpx.AsyncClient(timeout=5.0) as client:
+        async with httpx.AsyncClient(timeout=7.5) as client:
             resp = await asyncio.wait_for(
                 client.get(
                     "http://localhost:8888/search",
                     params={"q": query, "format": "json"}
                 ),
-                timeout=5.0
+                timeout=7.5
             )
             if resp.status_code == 200:
                 data = resp.json()
@@ -121,7 +120,7 @@ async def _ddg_search(
         try:
             # Instantiate DDGS per request to guarantee a fresh VQD token and avoid cross-thread async loop closures
             results = await asyncio.to_thread(
-                lambda: list(DDGS(timeout=8).text(search_query, max_results=max_results, backend="duckduckgo,google,bing,brave,startpage"))
+                lambda: list(DDGS(timeout=7.5).text(search_query, max_results=max_results, backend="duckduckgo,google,bing,brave,startpage"))
             )
             mapped = [
                 {"url": r["href"], "snippet": r.get("body", ""), "title": r.get("title", "")}
@@ -213,9 +212,17 @@ def _yt_video_id(url: str) -> str:
 
 async def _fetch_media(rewritten: str, original: str, num_urls: int) -> tuple[str, dict]:
     """Media intent: return YouTube video links only — no scraping, no relevance gate."""
-    results = await _ddg_search(
-        rewritten, site="youtube.com", max_results=num_urls + 4, allowed=_YT_ALLOW,
-    )
+    search_query = f"site:youtube.com {rewritten}"
+    results = await _searxng_search(search_query, max_results=num_urls + 4)
+    
+    if not results:
+        results = await _ddg_search(
+            rewritten, site="youtube.com", max_results=num_urls + 4, allowed=_YT_ALLOW,
+        )
+        
+    if not results:
+        results = await _tavily_search(search_query, max_results=num_urls + 4)
+
     vids, seen = [], set()
     for r in results:
         if not _is_youtube_video(r["url"]):
@@ -315,7 +322,7 @@ async def _rewrite_query(raw: str, context: str = "") -> dict:
 
     res = await race_models(
         ollama_task, nim_task, 
-        timeout=8.0, logger=_log, task_name="query rewrite",
+        timeout=10.0, logger=_log, task_name="query rewrite",
         primary_name="Ollama", backup_name="NIM"
     )
     if res:
@@ -431,19 +438,16 @@ async def fetch_web_context(
     found = []
     
     # --- Primary: SearXNG ---
-    # To disable SearXNG, comment out this block:
     found = await _searxng_search(searxng_q, max_results=10)
     if found:
         engine_used = "SearXNG"
         
     # --- Secondary: DuckDuckGo ---
-    # To disable DDGS, comment out this block:
     if not found:
         found = await _ddg_search(search_query, site=site, max_results=10, allowed=_FANDOM_ALLOW)
         if found: engine_used = "DuckDuckGo"
         
     # --- Tertiary: Tavily ---
-    # To disable Tavily, comment out this block:
     if not found:
         found = await _tavily_search(searxng_q, max_results=10)
         if found: engine_used = "Tavily"
@@ -672,9 +676,10 @@ def inject_web_context(messages: list[dict], web_ctx: str) -> None:
     prefix = (
         f"{web_ctx}\n\n"
         "Use the search results above to answer accurately. "
-        "Cite specific claims inline as (Source: <url>). "
+        "Cite specific claims inline as follow: (Source: <url>). "
         "If sources conflict, note the disagreement. "
-        "Do not fabricate information not found in the results.\n\n"
+        "Do not fabricate information not found in the results.\n"
+        "CRITICAL INSTRUCTION: You MUST reply in the exact same language as the user's latest query below, even if the search results are in a different language.\n\n"
     )
     last = messages[-1]
     if isinstance(last["content"], str):

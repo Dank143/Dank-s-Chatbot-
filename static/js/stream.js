@@ -33,7 +33,8 @@ export function getSearchPanelHtml(evt) {
 }
 
 function renderDebugPanel(wrapper, evt) {
-  wrapper.insertAdjacentHTML('beforeend', getSearchPanelHtml(evt));
+  const body = wrapper.querySelector('.message-body') || wrapper;
+  body.insertAdjacentHTML('beforeend', getSearchPanelHtml(evt));
 }
 
 // Stream SSE reply into assistant bubble: parse events, throttle markdown, handle abort.

@@ -13,7 +13,7 @@
   background: var(--bg-input);
   border: 1px solid var(--border-input);
   border-radius: var(--radius);
-  padding: 12px 12px 10px 20px;
+  padding: 16px 16px 10px 20px;
   display: flex;
   flex-direction: column;
   gap: 8px;

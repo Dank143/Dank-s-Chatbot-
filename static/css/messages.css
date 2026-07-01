@@ -28,6 +28,8 @@
   max-width: 842px;
   padding: 0 24px;
   margin-bottom: 6px;
+  position: relative;
+  z-index: 1;
 }
 
 /* user bubble */
@@ -294,7 +296,7 @@ html.light .model-tag {
   height: 28px;
   border-radius: var(--radius-xs);
   border: none;
-  background: none;
+  background: var(--bg);
   color: var(--text-muted);
   cursor: pointer;
   transition: background var(--transition), color var(--transition);

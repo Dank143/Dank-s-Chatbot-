@@ -4,7 +4,7 @@ from fastapi import APIRouter, File, HTTPException, UploadFile
 
 router = APIRouter(prefix="/api")
 
-_MAX_DOC_CHARS =100_000
+_MAX_DOC_CHARS =143_000
 
 
 @router.post("/extract-text")

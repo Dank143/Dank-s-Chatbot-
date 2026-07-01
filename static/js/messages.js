@@ -34,7 +34,7 @@ export function searchIndicatorHtml(query) {
     <svg class="search-glass" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
       <circle cx="11" cy="11" r="8"/><path d="m21 21-4.3-4.3"/>
     </svg>
-    <span class="search-label">Searching: ${escHtml(query)}<span class="thinking-dots"></span></span>`;
+    <span class="search-label">Searching for your query<span class="thinking-dots"></span></span>`;
 }
 
 // Render a user or assistant message bubble (streaming=true adds cursor placeholder).
@@ -108,9 +108,9 @@ export function appendMessage(msg, streaming = false, container = null, duoSide 
         <div class="bubble" data-raw="${escAttr(visible)}">
           ${streaming ? thinkingIndicator() : renderMarkdown(visible)}
         </div>
+        ${searchPanelHtml}
       </div>
       ${!streaming ? assistantActions : ''}
-      ${searchPanelHtml}
     `;
     // Attach click handler for think-toggle
     const toggle = wrapper.querySelector('.think-toggle');

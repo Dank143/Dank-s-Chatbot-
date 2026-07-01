@@ -6,7 +6,7 @@ export function loadTheme() {
 
 export function applyTheme(theme) {
   const isLight = theme === 'light';
-  document.body.classList.toggle('light', isLight);
+  document.documentElement.classList.toggle('light', isLight);
   $('themeIconSun').style.display  = isLight ? 'block' : 'none';
   $('themeIconMoon').style.display = isLight ? 'none'  : 'block';
   $('hljsDark').disabled  = isLight;
@@ -14,7 +14,7 @@ export function applyTheme(theme) {
 }
 
 export function toggleTheme() {
-  const isLight = document.body.classList.contains('light');
+  const isLight = document.documentElement.classList.contains('light');
   const next = isLight ? 'dark' : 'light';
   localStorage.setItem('theme', next);
   applyTheme(next);

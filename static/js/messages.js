@@ -3,7 +3,7 @@ import { api } from './api.js';
 import { renderMarkdown } from './markdown.js';
 import { DOC_ICON, _docStore, nextDocKey, openDocViewer } from './files.js';
 import { badgeHtml } from './models.js';
-import { streamAssistant } from './stream.js';
+import { streamAssistant, getSearchPanelHtml } from './stream.js';
 import { ICON, assistantActions } from './icons.js';
 
 // Extract <think>...</think> from persisted message content.
@@ -88,6 +88,16 @@ export function appendMessage(msg, streaming = false, container = null, duoSide 
           <div class="think-content">${renderMarkdown(think)}</div>
         </div>`;
     }
+    let searchPanelHtml = '';
+    if (msg.search_data) {
+      try {
+        const parsed = typeof msg.search_data === 'string' ? JSON.parse(msg.search_data) : msg.search_data;
+        searchPanelHtml = getSearchPanelHtml(parsed);
+      } catch (e) {
+        console.error('Failed to parse search_data', e);
+      }
+    }
+
     wrapper.innerHTML = `
       <div class="assistant-header">
         ${badgeHtml(msgModel, 26)}
@@ -100,6 +110,7 @@ export function appendMessage(msg, streaming = false, container = null, duoSide 
         </div>
       </div>
       ${!streaming ? assistantActions : ''}
+      ${searchPanelHtml}
     `;
     // Attach click handler for think-toggle
     const toggle = wrapper.querySelector('.think-toggle');

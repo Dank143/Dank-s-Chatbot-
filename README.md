@@ -4,12 +4,12 @@ A self-hosted AI chat interface powered by [NVIDIA NIM](https://build.nvidia.com
 
 ---
 
-## Screenshots
+## Demo Screenshots
 
-![Welcome Screen](screenshots/Welcome.png)
-![Settings & Config](screenshots/Config.png)
-![Chat Interface](screenshots/Chat.png)
-![Model Selection](screenshots/Models.png)
+![Welcome Screen](demo/Welcome.png)
+![Settings & Config](demo/Config.png)
+![Chat Interface Demo](demo/Chat.png)
+![Model Selection](demo/Models.png)
 
 ---
 
@@ -228,7 +228,7 @@ Web search also **auto-triggers** when the message contains high-confidence sear
 When triggered, the backend:
 1. **Rewrites** the user message into a standalone search query using a fast LLM (races Ollama and NIM via `models.yaml` config) with conversation context for pronoun resolution
 2. **Routes** to the best source based on intent: YouTube (media), Reddit (opinions), Cambridge Dictionary (linguistics), documentation, or auto-discovered entity wikis (Wikipedia, Fandom, game wikis)
-3. **Queries DuckDuckGo** with the rewritten query + site filter; probes for wiki hosts at runtime
+3. **Queries Engines**: Tries local SearXNG first (protected by a strict 5.0s timeout to prevent hanging), then falls back to DuckDuckGo (via a persistent, pre-warmed session to bypass rate limits); probes for wiki hosts at runtime
 4. **Fetches page content** by racing three fetchers per URL (first success wins): MediaWiki API, [Jina Reader](https://jina.ai/reader/), or Trafilatura; per-host caching avoids re-probing failed fetchers
 5. **Reranks** results using embeddings (races Ollama and NIM); falls back to keyword priority heuristic
 6. **Injects** retrieved context + citation instructions into the conversation before calling the model

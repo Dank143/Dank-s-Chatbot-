@@ -21,6 +21,7 @@ _log = logging.getLogger(__name__)
 _CACHE_TTL = 300
 
 _cfg = load_config()
+
 # DDG warmup guard: first query ratelimits without a warm session.
 _warmup_started = False
 _warmup_done = asyncio.Event()
@@ -80,21 +81,47 @@ def _cache_set(key: tuple, value: "tuple[str, dict]") -> None:
     _cache[key] = (value, time.monotonic())
 
 
+import os
+import httpx
+
+async def _searxng_search(query: str, max_results: int = 10) -> list[dict]:
+    """Primary search via self-hosted SearXNG."""
+    try:
+        # Strict timeout so a cold SearXNG container doesn't hang the UI for 30s.
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            resp = await asyncio.wait_for(
+                client.get(
+                    "http://localhost:8888/search",
+                    params={"q": query, "format": "json"}
+                ),
+                timeout=5.0
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                results = []
+                for r in data.get("results", []):
+                    results.append({
+                        "url": r.get("url", ""),
+                        "snippet": r.get("content", ""),
+                        "title": r.get("title", "")
+                    })
+                return results[:max_results]
+    except Exception as e:
+        _log.warning("SearXNG failed: %s", e)
+    return []
+
 async def _ddg_search(
-    query: str, site: str | None = None, max_results: int = 4,
-    allowed: "frozenset[str]" = frozenset(), max_attempts: int = 5,
+    query: str, site: str | None = None, max_results: int = 10,
+    allowed: "frozenset[str]" = frozenset(), max_attempts: int = 3,
 ) -> list[dict]:
-    """DDG text search (off-thread), optionally site-scoped; skips junk domains.
-    `allowed` whitelists otherwise-skipped domains. `max_attempts` bounds retries.
-    """
+    """Secondary search using DuckDuckGo library with multi-backend."""
     search_query = f"site:{site} {query}" if site else query
-    last_exc = False
-    backends = ["duckduckgo", "google", "yandex", "yahoo", "brave"]
+    last_exc = None
     for attempt in range(max_attempts):
-        backend = backends[attempt % len(backends)]
         try:
+            # Instantiate DDGS per request to guarantee a fresh VQD token and avoid cross-thread async loop closures
             results = await asyncio.to_thread(
-                lambda: list(DDGS(timeout=8).text(search_query, max_results=max_results, backend=backend))
+                lambda: list(DDGS(timeout=8).text(search_query, max_results=max_results, backend="duckduckgo,google,bing,brave,startpage"))
             )
             mapped = [
                 {"url": r["href"], "snippet": r.get("body", ""), "title": r.get("title", "")}
@@ -103,14 +130,43 @@ async def _ddg_search(
             ]
             if mapped:
                 return mapped
-            # If mapped is empty (all skipped), wait and retry.
-        except Exception:
-            last_exc = True
-        # No backoff after the final attempt — it only delays the return.
-        if attempt < max_attempts - 1:
-            await asyncio.sleep(0.5 * (attempt + 1))
-    if last_exc:
-        _log.warning("DDG search failed for %r", search_query, exc_info=True)
+        except Exception as e:
+            last_exc = e
+        await asyncio.sleep(0.5 * (attempt + 1))
+    _log.warning("DDGS multi-backend failed for %r: %s", search_query, last_exc)
+    return []
+
+async def _tavily_search(query: str, max_results: int = 5) -> list[dict]:
+    """Tertiary search using Tavily API (basic)."""
+    api_key = os.environ.get("TAVILY_API_KEY")
+    if not api_key:
+        return []
+    try:
+        async with httpx.AsyncClient(timeout=10) as client:
+            resp = await client.post(
+                "https://api.tavily.com/search",
+                json={
+                    "api_key": api_key,
+                    "query": query,
+                    "search_depth": "basic",
+                    "max_results": max_results,
+                    "include_answer": False
+                }
+            )
+            if resp.status_code == 200:
+                data = resp.json()
+                results = []
+                for r in data.get("results", []):
+                    results.append({
+                        "url": r.get("url", ""),
+                        "snippet": r.get("content", ""),
+                        "title": r.get("title", "")
+                    })
+                return results
+            else:
+                _log.warning("Tavily API returned %d: %s", resp.status_code, resp.text)
+    except Exception as e:
+        _log.warning("Tavily API failed: %s", e)
     return []
 
 
@@ -119,10 +175,13 @@ async def warmup() -> None:
     global _warmup_started
     _warmup_started = True
     try:
-        await asyncio.to_thread(lambda: list(DDGS(timeout=8).text("wikipedia", max_results=1)))
-        _log.debug("DDG warmup ok")
+        # Warmup SearXNG so its internal docker workers spin up and resolve DNS
+        async with httpx.AsyncClient(timeout=20.0) as client:
+            await client.get("http://localhost:8888/search", params={"q": "wikipedia", "format": "json"})
+        _log.debug("SearXNG warmup ok")
     except Exception:
-        _log.debug("DDG warmup failed", exc_info=True)
+        _log.debug("SearXNG warmup failed", exc_info=True)
+
     finally:
         _warmup_done.set()
 
@@ -195,12 +254,14 @@ async def _fetch_media(rewritten: str, original: str, num_urls: int) -> tuple[st
 
 async def _rewrite_query(raw: str, context: str = "") -> dict:
     """LLM-rewrite to standalone search query with intent."""
-    current_year = datetime.now().year
+    now = datetime.now()
+    current_month = now.strftime("%B")
+    current_year = now.year
     system_prompt = (
-        f"The current year is {current_year}. "
+        f"The current date is {current_month} {current_year}. "
         "Analyze the user's message and generate a standalone web search query. "
-        "Resolve pronouns, keep proper nouns. 4-10 words. "
-        "Do NOT add past years (e.g. 2024, 2025) to the query unless explicitly requested. "
+        "Sentence case, resolve pronouns, keep proper nouns. 4-10 words. "
+        "Do NOT add past years to the query unless explicitly requested. "
         "Also determine the optimal search intent.\n"
         "Output a JSON object with EXACTLY two keys:\n"
         '- "query": the rewritten search query string.\n'
@@ -254,7 +315,7 @@ async def _rewrite_query(raw: str, context: str = "") -> dict:
 
     res = await race_models(
         ollama_task, nim_task, 
-        timeout=5.0, logger=_log, task_name="query rewrite",
+        timeout=8.0, logger=_log, task_name="query rewrite",
         primary_name="Ollama", backup_name="NIM"
     )
     if res:
@@ -356,16 +417,37 @@ async def fetch_web_context(
     api_tasks: list = []
     if intent == "wiki":
         wiki_entity = True
-    elif site or suffix:
+        
+    if site or suffix:
         parts = [p for p in (rewritten, suffix, year) if p]
         search_query = " ".join(parts)
     else:
         parts = [rewritten, "wiki" if wiki_entity and not site else "", year]
         search_query = " ".join(p for p in parts if p).strip()
 
-    found = await _ddg_search(
-        search_query, site=site, max_results=10, allowed=_FANDOM_ALLOW,
-    )
+    searxng_q = f"site:{site} {search_query}" if site else search_query
+    
+    engine_used = ""
+    found = []
+    
+    # --- Primary: SearXNG ---
+    # To disable SearXNG, comment out this block:
+    found = await _searxng_search(searxng_q, max_results=10)
+    if found:
+        engine_used = "SearXNG"
+        
+    # --- Secondary: DuckDuckGo ---
+    # To disable DDGS, comment out this block:
+    if not found:
+        found = await _ddg_search(search_query, site=site, max_results=10, allowed=_FANDOM_ALLOW)
+        if found: engine_used = "DuckDuckGo"
+        
+    # --- Tertiary: Tavily ---
+    # To disable Tavily, comment out this block:
+    if not found:
+        found = await _tavily_search(searxng_q, max_results=10)
+        if found: engine_used = "Tavily"
+
     if api_tasks:
         seen_seed = {r["url"] for r in seed}
         for res in await asyncio.gather(*api_tasks):
@@ -381,10 +463,27 @@ async def fetch_web_context(
     if len(results) < max(2, num_urls // 2):
         used_fallback = True
         seen = {r["url"] for r in results}
-        general = await _ddg_search(
-            rewritten, site=None, max_results=12,
-            allowed=_FANDOM_ALLOW, max_attempts=4,
-        )
+        
+        general = []
+        
+        # --- Primary Fallback: SearXNG ---
+        # To disable SearXNG, comment out this block:
+        general = await _searxng_search(rewritten, max_results=12)
+        if general:
+            engine_used = "SearXNG (Fallback)" if engine_used else "SearXNG"
+            
+        # --- Secondary Fallback: DuckDuckGo ---
+        # To disable DDGS, comment out this block:
+        if not general:
+            general = await _ddg_search(rewritten, site=None, max_results=12, allowed=_FANDOM_ALLOW, max_attempts=4)
+            if general: engine_used = "DuckDuckGo (Fallback)" if engine_used else "DuckDuckGo"
+            
+        # --- Tertiary Fallback: Tavily ---
+        # To disable Tavily, comment out this block:
+        if not general:
+            general = await _tavily_search(rewritten, max_results=12)
+            if general: engine_used = "Tavily (Fallback)" if engine_used else "Tavily"
+            
         results += [r for r in general if r["url"] not in seen]
 
     debug: dict = {
@@ -393,6 +492,7 @@ async def fetch_web_context(
         "rewritten_query": rewritten,
         "query": search_query,
         "fallback": used_fallback,
+        "engine": engine_used,
         "sources": [],
     }
 
@@ -538,9 +638,26 @@ async def fetch_web_context(
     if not parts:
         return "", debug
 
+    # Enforce a hard character limit to prevent blowing out the model's context window.
+    # We allocate 25,000 characters total across all parts.
+    max_total_chars = 25000
+    truncated_parts = []
+    current_length = 0
+    
+    for p in parts:
+        remaining = max_total_chars - current_length
+        if remaining <= 0:
+            break
+        if len(p) > remaining:
+            truncated_parts.append(p[:remaining] + "\n... [truncated to fit context window]")
+            current_length += remaining
+        else:
+            truncated_parts.append(p)
+            current_length += len(p)
+
     ctx = (
         "=== Web Search Results ===\n\n"
-        + "\n\n---\n\n".join(parts)
+        + "\n\n---\n\n".join(truncated_parts)
         + "\n\n=== End of Web Results ==="
     )
     result = (ctx, debug)

@@ -31,19 +31,19 @@ def _fallback_title(text: str) -> str:
     return text[:60].strip() + ("…" if len(text) > 60 else "")
 
 
-async def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None", model: "str | None" = None, overwrite: bool = False, duo_side: int = 0) -> None:
+async def _save_assistant(chat_id: str, msg_id: str, content: str, title: "str | None", model: "str | None" = None, overwrite: bool = False, duo_side: int = 0, search_data: "str | None" = None) -> None:
     """Persist an assistant message, bump the chat, and optionally set its title."""
     def _task(conn):
         ts = now_iso()
         if overwrite:
             conn.execute(
-                "UPDATE messages SET content=?, model=?, duo_side=? WHERE id=?",
-                (content, model, duo_side, msg_id)
+                "UPDATE messages SET content=?, model=?, duo_side=?, search_data=? WHERE id=?",
+                (content, model, duo_side, search_data, msg_id)
             )
         else:
             conn.execute(
-                "INSERT INTO messages (id, chat_id, role, content, created_at, model, duo_side) VALUES (?,?,?,?,?,?,?)",
-                (msg_id, chat_id, "assistant", content, ts, model, duo_side),
+                "INSERT INTO messages (id, chat_id, role, content, created_at, model, duo_side, search_data) VALUES (?,?,?,?,?,?,?,?)",
+                (msg_id, chat_id, "assistant", content, ts, model, duo_side, search_data),
             )
         conn.execute("UPDATE chats SET updated_at=? WHERE id=?", (ts, chat_id))
         if title:
@@ -191,6 +191,7 @@ async def send_message(chat_id: str, body: SendMessageBody):
 
     async def stream_response():
         asst_msg_id = str(uuid.uuid4())
+        search_debug_json = None
         yield f"data: {json.dumps({'type': 'meta', 'user_msg_id': user_msg_id})}\n\n"
 
         if body.web_search and body.content:
@@ -212,12 +213,14 @@ async def send_message(chat_id: str, body: SendMessageBody):
                     "fallback": True, "sources": [], "timed_out": True,
                 }
             inject_web_context(messages, web_ctx)
-            yield f"data: {json.dumps({'type': 'search_debug', 'got_context': bool(web_ctx), **search_debug})}\n\n"
+            search_payload = {'got_context': bool(web_ctx), **search_debug}
+            search_debug_json = json.dumps(search_payload)
+            yield f"data: {json.dumps({'type': 'search_debug', **search_payload})}\n\n"
 
         creator_resp = is_asking_about_creator(body.content)
         if creator_resp:
             fallback = _fallback_title(body.content) if needs_title and body.content else None
-            await _save_assistant(chat_id, asst_msg_id, creator_resp, fallback, model, False, body.duo_side)
+            await _save_assistant(chat_id, asst_msg_id, creator_resp, fallback, model, False, body.duo_side, search_debug_json)
             yield f"data: {json.dumps({'type': 'delta', 'content': creator_resp})}\n\n"
             if fallback:
                 yield f"data: {json.dumps({'type': 'title', 'title': fallback})}\n\n"
@@ -250,7 +253,7 @@ async def send_message(chat_id: str, body: SendMessageBody):
             return
 
         # Persist answer and emit 'done' before resolving the title.
-        await _save_assistant(chat_id, asst_msg_id, hail + result["content"], None, model, False, body.duo_side)
+        await _save_assistant(chat_id, asst_msg_id, hail + result["content"], None, model, False, body.duo_side, search_debug_json)
         yield f"data: {json.dumps({'type': 'done', 'asst_msg_id': asst_msg_id, 'finish_reason': result.get('finish_reason')})}\n\n"
 
         if needs_title:
@@ -345,6 +348,7 @@ async def regenerate_response(chat_id: str, body: RegenerateBody):
 
     async def stream_response():
         asst_msg_id = body.overwrite_message_id or str(uuid.uuid4())
+        search_debug_json = None
 
         if body.web_search and last_user:
             ctx_turns = [m for m in history if m["content"]][:-1][-6:]
@@ -363,7 +367,9 @@ async def regenerate_response(chat_id: str, body: RegenerateBody):
                     "fallback": True, "sources": [], "timed_out": True,
                 }
             inject_web_context(messages_list, web_ctx)
-            yield f"data: {json.dumps({'type': 'search_debug', 'got_context': bool(web_ctx), **search_debug})}\n\n"
+            search_payload = {'got_context': bool(web_ctx), **search_debug}
+            search_debug_json = json.dumps(search_payload)
+            yield f"data: {json.dumps({'type': 'search_debug', **search_payload})}\n\n"
 
         result: dict = {}
         for attempt in range(2):
@@ -378,7 +384,7 @@ async def regenerate_response(chat_id: str, body: RegenerateBody):
         if not result["content"].strip():
             yield f"data: {json.dumps({'type': 'error', 'message': 'The model returned an empty response. Please try again.'})}\n\n"
             return
-        await _save_assistant(chat_id, asst_msg_id, result["content"], None, model, overwrite=bool(body.overwrite_message_id))
+        await _save_assistant(chat_id, asst_msg_id, result["content"], None, model, overwrite=bool(body.overwrite_message_id), duo_side=body.duo_side, search_data=search_debug_json)
         yield f"data: {json.dumps({'type': 'done', 'asst_msg_id': asst_msg_id, 'finish_reason': result.get('finish_reason')})}\n\n"
 
     return StreamingResponse(stream_response(), media_type="text/event-stream", headers=_SSE_HEADERS)

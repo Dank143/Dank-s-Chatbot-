@@ -3,7 +3,7 @@ import { renderMarkdown, setHighlight } from './markdown.js';
 import { api } from './api.js';
 import { finalizeStreamingMessage, showMessageError, showTruncationNotice, showStoppedNotice, searchIndicatorHtml } from './messages.js';
 
-function renderDebugPanel(wrapper, evt) {
+export function getSearchPanelHtml(evt) {
   const methodIcon = (m) => m === 'failed' ? '✗' : '✓';
   const methodClass = (m) => m === 'failed' ? 'debug-src-fail' : m === 'snippet' ? 'debug-src-snippet' : 'debug-src-ok';
   const sourcesHtml = (evt.sources || []).map(s => `
@@ -12,27 +12,28 @@ function renderDebugPanel(wrapper, evt) {
       <span class="debug-src-method">${escHtml(s.method)}</span>
       <span class="debug-src-score">${s.score ? s.score.toFixed(3) : '—'}</span>
       <span class="debug-src-chars">${s.chars > 0 ? s.chars + ' chars' : '—'}</span>
-      <span class="debug-src-url">${escHtml(s.url)}</span>
+      <a class="debug-src-url" href="${escHtml(s.url)}" target="_blank" rel="noopener noreferrer">${escHtml(s.url)}</a>
     </div>`).join('');
 
-  const panel = document.createElement('div');
-  panel.className = 'search-debug-panel';
-  panel.style.display = state.debugMode ? '' : 'none';
-  panel.innerHTML = `
-    <div class="debug-header" onclick="this.parentElement.classList.toggle('expanded')">
-      <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
-      <span>Search debug</span>
-      <span class="debug-got-ctx ${evt.got_context ? 'ok' : 'fail'}">${evt.got_context ? 'context injected' : 'no context'}</span>
-      <span class="debug-chevron">▸</span>
-    </div>
-    <div class="debug-body">
-      <div class="debug-row"><span class="debug-key">Intent</span><span class="debug-val">${escHtml(evt.site || '—')}</span></div>
-      <div class="debug-row"><span class="debug-key">Query</span><span class="debug-val">${escHtml(evt.query || '—')}</span></div>
-      <div class="debug-row"><span class="debug-key">Fallback</span><span class="debug-val ${evt.fallback ? 'warn' : ''}">${evt.fallback ? 'yes' : 'no'}</span></div>
-      <div class="debug-row"><span class="debug-key">Rerank</span><span class="debug-val ${evt.rerank === 'embed' ? '' : 'warn'}">${evt.rerank === 'embed' ? 'embed (score)' : 'keyword'}${evt.degraded ? ' · ' + escHtml(evt.degraded) : ''}</span></div>
-      <div class="debug-sources">${sourcesHtml || '<div class="debug-source debug-src-fail"><span class="debug-src-icon">✗</span><span>No URLs found</span></div>'}</div>
+  return `
+    <div class="search-debug-panel">
+      <div class="debug-header" onclick="this.parentElement.classList.toggle('expanded')">
+        <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"><polyline points="4 17 10 11 4 5"/><line x1="12" y1="19" x2="20" y2="19"/></svg>
+        <span>Search status:</span>
+        <span class="debug-got-ctx ${evt.got_context ? 'ok' : 'fail'}">${evt.got_context ? 'context injected' : 'no context'}</span>
+        <span class="debug-chevron">▸</span>
+      </div>
+      <div class="debug-body">
+        <div class="debug-row"><span class="debug-key">Query</span><span class="debug-val">${escHtml(evt.query || '—')}</span></div>
+        <div class="debug-row"><span class="debug-key">Engine</span><span class="debug-val">${escHtml(evt.engine || '—')}</span></div>
+        <div class="debug-row"><span class="debug-key">Rerank</span><span class="debug-val ${evt.rerank === 'embed' ? '' : 'warn'}">${evt.rerank === 'embed' ? 'Score (higher = more relevant)' : 'keyword'}${evt.degraded ? ' · ' + escHtml(evt.degraded) : ''}</span></div>
+        <div class="debug-sources">${sourcesHtml || '<div class="debug-source debug-src-fail"><span class="debug-src-icon">✗</span><span>No URLs found</span></div>'}</div>
+      </div>
     </div>`;
-  wrapper.appendChild(panel);
+}
+
+function renderDebugPanel(wrapper, evt) {
+  wrapper.insertAdjacentHTML('beforeend', getSearchPanelHtml(evt));
 }
 
 // Stream SSE reply into assistant bubble: parse events, throttle markdown, handle abort.

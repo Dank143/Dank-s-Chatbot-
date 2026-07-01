@@ -39,6 +39,7 @@ def init_db():
                 attachments TEXT,
                 model       TEXT,
                 duo_side    INTEGER NOT NULL DEFAULT 0,
+                search_data TEXT,
                 FOREIGN KEY (chat_id) REFERENCES chats(id) ON DELETE CASCADE
             );
         """)
@@ -69,6 +70,11 @@ def init_db():
                 UPDATE messages SET duo_side = (SELECT side FROM numbered WHERE numbered.id = messages.id)
                 WHERE id IN (SELECT id FROM numbered);
             """)
+        except sqlite3.OperationalError:
+            pass
+        # Migration: add search_data column if missing.
+        try:
+            conn.execute("ALTER TABLE messages ADD COLUMN search_data TEXT")
         except sqlite3.OperationalError:
             pass
 

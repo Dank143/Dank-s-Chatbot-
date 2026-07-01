@@ -41,7 +41,7 @@
 }
 
 /* ── Light theme ──────────────────────────────────────────────────── */
-body.light {
+html.light {
   --bg:           #f0f6fc;
   --bg-sidebar:   #e4edf7;
   --bg-input:     #ffffff;

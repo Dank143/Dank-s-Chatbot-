@@ -85,7 +85,7 @@
   letter-spacing: .03em;
 }
 
-body.light .model-tag {
+html.light .model-tag {
   color: var(--text-sub);
 }
 

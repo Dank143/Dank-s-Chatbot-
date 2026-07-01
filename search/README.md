@@ -163,6 +163,9 @@ sources inline and not fabricate beyond the results.
 + fandom API + DDG) → embedding rerank → keyword gate → tiered fallback → per-host
 fetcher cache`.
 
+- **Startup Warmup**: On server boot, a shared persistent `DDGS` session is initialized and warmed up to bypass initial DuckDuckGo anti-bot rate limits. Concurrently, a dummy query is sent to SearXNG to force its internal docker workers to spin up and resolve DNS, avoiding massive cold-start penalties on the first user query.
+- **Strict Engine Timeouts**: Local `SearXNG` searches are wrapped in a strict `5.0s` timeout guard. If the SearXNG container hangs or takes too long to aggregate results, it aborts instantly and falls back to DuckDuckGo, guaranteeing the UI stream never freezes.
+
 ## Configuration
 
 | Constant | File | Value | Meaning |

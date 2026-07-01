@@ -496,8 +496,8 @@
 .tips-wrap { position: relative; display: flex; align-items: center; }
 .tips-popup {
   position: absolute;
-  top: calc(100% + 16px);
-  right: 0;
+  top: calc(100% + 15px);
+  right: -6px;
   z-index: 60;
   width: 280px;
   padding: 12px 14px;

@@ -190,7 +190,7 @@
   background: #3a5068;
 }
 
-body.light .model-stat-seg {
+html.light .model-stat-seg {
   background: var(--border);
 }
 

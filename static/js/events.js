@@ -53,7 +53,6 @@ export function setupEventListeners() {
       localStorage.setItem(`webSearch_${state.activeChatId}`, state.webSearch ? '1' : '0');
     }
   });
-  $('debugToggleBtn').addEventListener('click', () => setDebugMode(!state.debugMode));
   $('sidebarToggle').addEventListener('click', toggleSidebar);
   $('collapsedSidebarToggle').addEventListener('click', toggleSidebar);
   $('sidebarToggleMobile').addEventListener('click', toggleSidebar);

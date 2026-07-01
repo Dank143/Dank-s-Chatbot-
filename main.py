@@ -15,18 +15,25 @@ from routers.chats import router as chats_router
 from routers.files import router as files_router
 from routers.messages import router as messages_router
 from routers.settings import router as settings_router, _ping_model
-from search import warmup as _warmup_search
-
-# Aux model for title generation and search-query rewriting; warmed on boot.
-_AUX_MODEL = "qwen/qwen3-next-80b-a3b-instruct"
+from search import warmup as _warmup_search, shutdown as _shutdown_search
+from config import load_config
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    # Warm aux LLM and DDG session concurrently at startup.
-    asyncio.create_task(_ping_model(_AUX_MODEL, "nim"))
+    cfg = load_config()
+    nim_title = cfg.get("title_model_nim")
+    ollama_title = cfg.get("title_model_ollama")
+    
+    # Warm aux LLMs and DDG session concurrently at startup.
+    if nim_title:
+        asyncio.create_task(_ping_model(nim_title, "nim"))
+    if ollama_title:
+        asyncio.create_task(_ping_model(ollama_title, "ollama"))
+        
     asyncio.create_task(_warmup_search())
     yield
+    await _shutdown_search()
 
 
 app = FastAPI(title="NIM Chatbot", lifespan=lifespan)

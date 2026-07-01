@@ -57,6 +57,17 @@ async def race_models(primary_task, backup_task, timeout=5.0, logger=None, task_
     pending = {t for t in (primary_task, backup_task) if t}
     log = logger or logging.getLogger(__name__)
 
+    def _safe_result(task):
+        try:
+            return task.result()
+        except Exception as e:
+            log.warning("Task %s raised exception: %s", task, e)
+            return None
+
+    def _short_repr(val):
+        s = repr(val)
+        return s if len(s) < 200 else s[:197] + "..."
+
     while pending:
         elapsed = time.monotonic() - start_time
         remaining = timeout - elapsed
@@ -68,25 +79,22 @@ async def race_models(primary_task, backup_task, timeout=5.0, logger=None, task_
             break
 
         if primary_task in done:
-            res = primary_task.result()
+            res = _safe_result(primary_task)
             if res:
-                log.info("%s was used for %s: %r", primary_name, task_name, res)
+                log.info("%s was used for %s: %s", primary_name, task_name, _short_repr(res))
                 return res
                 
         if backup_task and backup_task in done:
-            res = backup_task.result()
+            res = _safe_result(backup_task)
             if res:
                 if primary_task in pending:
-                    elapsed = time.monotonic() - start_time
-                    remaining = timeout - elapsed
-                    if remaining > 0:
-                        prim_done, _ = await asyncio.wait([primary_task], timeout=remaining)
-                        if primary_task in prim_done:
-                            n_res = primary_task.result()
-                            if n_res:
-                                log.info("%s finished in time and was used for %s: %r", primary_name, task_name, n_res)
-                                return n_res
-                log.info("%s timed out or failed, %s used for %s: %r", primary_name, backup_name, task_name, res)
+                    prim_done, _ = await asyncio.wait([primary_task], timeout=0.4)
+                    if primary_task in prim_done:
+                        n_res = _safe_result(primary_task)
+                        if n_res:
+                            log.info("%s finished in grace window and was used for %s: %s", primary_name, task_name, _short_repr(n_res))
+                            return n_res
+                log.info("%s timed out or failed, %s used for %s: %s", primary_name, backup_name, task_name, _short_repr(res))
                 return res
 
     log.warning("%s fully failed or timed out.", task_name.capitalize())

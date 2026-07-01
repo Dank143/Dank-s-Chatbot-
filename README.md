@@ -51,8 +51,7 @@ Chatbot/
 ├── requirements.txt
 ├── icon/                # Provider icon PNGs served at /icon/*
 ├── search/
-│   ├── classifier.py    # Intent routing (reddit, cambridge, youtube, docs)
-│   ├── fetcher.py       # Page fetching (MediaWiki API, Jina, Trafilatura)
+│   ├── fetcher.py       # Page fetching (Jina, Trafilatura)
 │   └── pipeline.py      # Query rewrite, DDG search, rerank, context assembly
 ├── routers/
 │   ├── chats.py         # Chat CRUD (create, list, get, update, delete)
@@ -115,6 +114,7 @@ Create a `.env` file in the project root:
 ```
 NVIDIA_API_KEY=nvapi-YOUR_KEY_HERE
 OLLAMA_API_KEY=your-ollama-key        # optional, for Ollama provider
+TAVILY_API_KEY=tvly-YOUR_KEY_HERE     # optional, for web search fallback
 ```
 
 Or set it later via the Settings modal in the UI — changes are written back to `.env` automatically.
@@ -142,6 +142,7 @@ Open [http://localhost:8000](http://localhost:8000) in your browser.
 ```
 NVIDIA_API_KEY=nvapi-...
 OLLAMA_API_KEY=...          # optional
+TAVILY_API_KEY=...          # optional
 ```
 
 Environment variables `NVIDIA_BASE_URL`, `OLLAMA_BASE_URL` / `OLLAMA_HOST` can also override base URLs.
@@ -226,10 +227,10 @@ Click the globe icon (🌐) in the input toolbar to toggle web search for the cu
 Web search also **auto-triggers** when the message contains high-confidence search-intent patterns — phrases like "latest news on", "what's happening with", "update on", "what happened to", "who won", "current score", etc. This can be enable in settings.
 
 When triggered, the backend:
-1. **Rewrites** the user message into a standalone search query using a fast LLM (races Ollama and NIM via `models.yaml` config) with conversation context for pronoun resolution
-2. **Routes** to the best source based on intent: YouTube (media), Reddit (opinions), Cambridge Dictionary (linguistics), documentation, or auto-discovered entity wikis (Wikipedia, Fandom, game wikis)
-3. **Queries Engines**: Tries local SearXNG first (protected by a strict 5.0s timeout to prevent hanging), then falls back to DuckDuckGo (via a persistent, pre-warmed session to bypass rate limits); probes for wiki hosts at runtime
-4. **Fetches page content** by racing three fetchers per URL (first success wins): MediaWiki API, [Jina Reader](https://jina.ai/reader/), or Trafilatura; per-host caching avoids re-probing failed fetchers
+1. **Rewrites** the user message into a standalone search query. Uses a regex fast-path for obvious intents (media, documentation, dictionary, opinion) to skip the LLM overhead. For complex queries, uses a fast LLM (races Ollama and NIM via `models.yaml` config) to resolve pronouns and determine intent.
+2. **Routes** to the best source based on intent: YouTube (media), documentation, or auto-discovered entity wikis (Wikipedia, Fandom, game wikis)
+3. **Queries Engines**: Uses a staggered cascade, triggering SearXNG -> DuckDuckGo -> Tavily API sequentially to ensure fast results while falling back gracefully.
+4. **Fetches page content** by racing fetchers per URL (first success wins): [Jina Reader](https://jina.ai/reader/) or Trafilatura; per-host caching avoids re-probing failed fetchers
 5. **Reranks** results using embeddings (races Ollama and NIM); falls back to keyword priority heuristic
 6. **Injects** retrieved context + citation instructions into the conversation before calling the model
 
@@ -286,7 +287,7 @@ data: {"type": "error",        "message": "..."}                       # error d
 | Backend | Python 3.11+, FastAPI, Uvicorn |
 | AI API | NVIDIA NIM + Ollama (OpenAI-compatible) via `openai` SDK |
 | Database | SQLite (via `sqlite3` stdlib, WAL mode) |
-| Web Search | DuckDuckGo (`ddgs`) + Jina Reader + MediaWiki API + Trafilatura + NIM embeddings (reranking) |
+| Web Search | DuckDuckGo (`ddgs`) + Tavily API + Jina Reader + Trafilatura + embeddings (reranking) |
 | Document parsing | pypdf, python-docx, python-pptx, openpyxl |
 | Frontend | Vanilla JS (ES modules), CSS custom properties |
 | Markdown / Math | marked.js + highlight.js + KaTeX (CDN) |

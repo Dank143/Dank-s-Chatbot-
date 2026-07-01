@@ -4,6 +4,8 @@ import math
 import re
 import time
 import logging
+import hashlib
+import concurrent.futures
 from datetime import datetime
 
 from ddgs import DDGS
@@ -13,7 +15,7 @@ from llm import race_models, get_client
 from urllib.parse import urlparse, parse_qs
 
 
-from .fetcher import fetch_content, skip
+from .fetcher import fetch_content, skip, warmup_browser, shutdown_browser
 
 _log = logging.getLogger(__name__)
 
@@ -25,44 +27,18 @@ _cfg = load_config()
 _warmup_started = False
 _warmup_done = asyncio.Event()
 _MAX_URLS = _cfg.get("defaults", {}).get("max_search_urls", 5)
+_DDG_EXECUTOR = concurrent.futures.ThreadPoolExecutor(max_workers=32)
 
 _cache: dict[tuple, tuple] = {}
 
-# Entity lead-token -> discovered wiki host (or None); learned at runtime.
-_wiki_host_cache: dict[str, "str | None"] = {}
-
-# "wiki*" services that are not entity wikis, and foreign-language Wikipedias.
-_NONWIKI_HOSTS = ("wikihow", "wikiedu", "wiktionary", "wikitravel", "wikiquote", "wikidata", "namu.wiki")
-
-
-def _is_wiki_host(host: str) -> bool:
-    h = host.lower()
-    if "wiki" not in h:
-        return False
-    if any(b in h for b in _NONWIKI_HOSTS):
-        return False
-    # Exclude non-English Wikipedias/Wikimedia (en.* and en.m.* are fine).
-    if (h.endswith("wikipedia.org") or h.endswith("wikimedia.org")) and not h.startswith(("en.", "en.m.")):
-        return False
-    return True
-
-
-# Dynamic wiki host discovery removed in favor of robust DDG text search.
-
-
 _FANDOM_ALLOW = frozenset({"fandom.com"})
 
-# Quote/voiceline queries: append "audio" to surface wiki /Audio subpages.
-_VOICE_HINT_RE = re.compile(
-    r'\b(quotes?|voice ?lines?|voicelines?|sayings?|dialogue|dialog)\b', re.I
-)
-
-
-def _audio_hint(query: str, source: str) -> str:
-    """Append 'audio' to wiki query if user asked for quotes/lines."""
-    if "audio" in query.lower() or not _VOICE_HINT_RE.search(source):
-        return query
-    return f"{query} audio"
+_REGEX_INTENTS = [
+    (re.compile(r'\b(youtube|trailer|soundtrack|gameplay|video|music|listen)\b', re.I), "media"),
+    (re.compile(r'\b(traceback|pip install|error|exception|npm install|docs|documentation|api reference)\b', re.I), "documentation"),
+    (re.compile(r'\b(reddit|best|vs|versus|should i|review|opinions?|recommendations?)\b', re.I), "opinion"),
+    (re.compile(r'\b(meaning of|define|definition|synonym|translate|what does .* mean)\b', re.I), "dictionary"),
+]
 
 
 def _cache_get(key: tuple) -> "tuple[str, dict] | None":
@@ -77,7 +53,16 @@ def _cache_get(key: tuple) -> "tuple[str, dict] | None":
 
 
 def _cache_set(key: tuple, value: "tuple[str, dict]") -> None:
-    _cache[key] = (value, time.monotonic())
+    now = time.monotonic()
+    expired = [k for k, (v, ts) in _cache.items() if now - ts >= _CACHE_TTL]
+    for k in expired:
+        del _cache[k]
+        
+    if len(_cache) >= 200:
+        oldest = min(_cache.keys(), key=lambda k: _cache[k][1])
+        del _cache[oldest]
+        
+    _cache[key] = (value, now)
 
 
 import os
@@ -119,7 +104,8 @@ async def _ddg_search(
     for attempt in range(max_attempts):
         try:
             # Instantiate DDGS per request to guarantee a fresh VQD token and avoid cross-thread async loop closures
-            results = await asyncio.to_thread(
+            results = await asyncio.get_running_loop().run_in_executor(
+                _DDG_EXECUTOR,
                 lambda: list(DDGS(timeout=7.5).text(search_query, max_results=max_results, backend="duckduckgo,google,bing,brave,startpage"))
             )
             mapped = [
@@ -180,9 +166,17 @@ async def warmup() -> None:
         _log.debug("SearXNG warmup ok")
     except Exception:
         _log.debug("SearXNG warmup failed", exc_info=True)
+        
+    try:
+        await warmup_browser()
+    except Exception:
+        pass
 
     finally:
         _warmup_done.set()
+
+async def shutdown() -> None:
+    await shutdown_browser()
 
 
 async def _await_warmup() -> None:
@@ -272,7 +266,7 @@ async def _rewrite_query(raw: str, context: str = "") -> dict:
         "Also determine the optimal search intent.\n"
         "Output a JSON object with EXACTLY two keys:\n"
         '- "query": the rewritten search query string.\n'
-        '- "intent": one of "wiki" (facts/entities), "media" (youtube/music/video), "opinion" (reviews/reddit), "dictionary" (definitions/translations), "documentation" (code/errors), or "general".'
+        '- "intent": one of "wiki" (facts/entities), "media" (youtube/music/video), "documentation" (code/errors), "opinion" (reviews/reddit), "dictionary" (definitions/translations), or "general".'
     )
     
     if context:
@@ -322,7 +316,7 @@ async def _rewrite_query(raw: str, context: str = "") -> dict:
 
     res = await race_models(
         ollama_task, nim_task, 
-        timeout=10.0, logger=_log, task_name="query rewrite",
+        timeout=5.0, logger=_log, task_name="query rewrite",
         primary_name="Ollama", backup_name="NIM"
     )
     if res:
@@ -334,26 +328,38 @@ _EMBED_TIMEOUT = 6.9
 
 
 async def _embed(texts: list[str], input_type: str) -> "list[list[float]] | None":
-    """Embed texts via NIM."""
+    """Embed texts via Ollama or NIM."""
     if not texts:
         return []
-    try:
-        cfg = load_config()
-        embed_model = cfg.get("embed_model_nim")
-        if not embed_model:
+
+    async def _fetch_embed(provider: str, model: str) -> list[list[float]] | None:
+        try:
+            client = get_client(provider)
+            kwargs = {"model": model, "input": texts}
+            if provider == "nim":
+                kwargs["extra_body"] = {"input_type": input_type, "truncate": "END"}
+            resp = await client.embeddings.create(**kwargs)
+            return [d.embedding for d in resp.data]
+        except Exception as e:
+            _log.warning("%s embedding failed: %s", provider, e)
             return None
-        resp = await asyncio.wait_for(
-            get_client("nim").embeddings.create(
-                model=embed_model,
-                input=texts,
-                extra_body={"input_type": input_type, "truncate": "END"},
-            ),
-            timeout=_EMBED_TIMEOUT,
-        )
-        return [d.embedding for d in resp.data]
-    except Exception:
-        _log.warning("Embedding failed (%s)", input_type, exc_info=True)
+
+    cfg = load_config()
+    nim_model = cfg.get("embed_model_nim")
+    ollama_model = cfg.get("embed_model_ollama")
+
+    nim_task = asyncio.create_task(_fetch_embed("nim", nim_model)) if nim_model else None
+    ollama_task = asyncio.create_task(_fetch_embed("ollama", ollama_model)) if ollama_model else None
+
+    if not nim_task and not ollama_task:
         return None
+
+    res = await race_models(
+        ollama_task, nim_task,
+        timeout=5.0, logger=_log, task_name="semantic rerank",
+        primary_name="Ollama", backup_name="NIM"
+    )
+    return res
 
 
 def _cosine(a: list[float], b: list[float]) -> float:
@@ -381,22 +387,98 @@ async def _rerank(query: str, results: list[dict]) -> bool:
     return True
 
 
+async def _staggered_search_cascade(
+    searxng_q: str, search_query: str, site: str | None, max_results: int, is_fallback: bool = False
+) -> tuple[list[dict], str]:
+    """
+    Run SearXNG -> DDG -> Tavily in a staggered race.
+    Budget is halved if is_fallback=True.
+    Returns (results, engine_used).
+    """
+    t1 = 1.5 if is_fallback else 3.0
+    t2 = 1.5 if is_fallback else 3.0
+    t_ddg = 3.0 if is_fallback else 6.0
+    searxng_task = asyncio.ensure_future(_searxng_search(searxng_q, max_results))
+    
+    async def _ddg_with_timeout():
+        try:
+            return await asyncio.wait_for(
+                _ddg_search(search_query, site=site, max_results=max_results, allowed=_FANDOM_ALLOW),
+                timeout=t_ddg
+            )
+        except asyncio.TimeoutError:
+            return []
+            
+    ddg_task = None
+    tavily_task = None
+    
+    # Phase 1: wait up to t1 for SearXNG
+    done, pending = await asyncio.wait([searxng_task], timeout=t1)
+    if searxng_task in done:
+        res = searxng_task.result()
+        if res: return res, "SearXNG"
+    
+    # Phase 2: SearXNG didn't return, launch DDG
+    ddg_task = asyncio.ensure_future(_ddg_with_timeout())
+    pending = [t for t in (searxng_task, ddg_task) if not t.done()]
+    
+    if pending:
+        done, pending = await asyncio.wait(pending, timeout=t2, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            res = task.result()
+            if res:
+                for p in pending: p.cancel()
+                return res, "SearXNG" if task == searxng_task else "DuckDuckGo"
+            
+    # Phase 3: Still nothing, launch Tavily
+    tavily_task = asyncio.ensure_future(_tavily_search(searxng_q, max_results=max_results))
+    pending = [t for t in (searxng_task, ddg_task, tavily_task) if t and not t.done()]
+    
+    while pending:
+        done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
+        for task in done:
+            res = task.result()
+            if res:
+                for p in pending: p.cancel()
+                if task == searxng_task: return res, "SearXNG"
+                if task == ddg_task: return res, "DuckDuckGo"
+                return res, "Tavily"
+                
+    return [], ""
+
+
 async def fetch_web_context(
     query: str, num_urls: int = _MAX_URLS, history_context: str = ""
 ) -> tuple[str, dict]:
     """Rewrite, route, and fetch web context."""
-    cache_key = (query.lower().strip(), history_context[:200], num_urls)
+    t_start = time.monotonic()
+    ctx_hash = hashlib.md5(history_context.encode("utf-8")).hexdigest() if history_context else ""
+    cache_key = (query.lower().strip(), ctx_hash, num_urls)
     cached = _cache_get(cache_key)
     if cached is not None:
         _log.debug("Cache hit for %r", query)
         return cached
 
-    rewrite_res, _ = await asyncio.gather(
-        _rewrite_query(query, history_context),
-        _await_warmup(),
-    )
-    rewritten = rewrite_res.get("query", query)
-    intent = rewrite_res.get("intent", "general")
+    t_rewrite_start = time.monotonic()
+    
+    intent = None
+    rewritten = query
+    for pattern, pattern_intent in _REGEX_INTENTS:
+        if pattern.search(query):
+            intent = pattern_intent
+            break
+
+    if intent is None:
+        rewrite_res, _ = await asyncio.gather(
+            _rewrite_query(query, history_context),
+            _await_warmup(),
+        )
+        rewritten = rewrite_res.get("query", query)
+        intent = rewrite_res.get("intent", "general")
+    else:
+        await _await_warmup()
+
+    t_rewrite = int((time.monotonic() - t_rewrite_start) * 1000)
 
     year = "" if re.search(r"\b(19|20)\d{2}\b", rewritten) else str(datetime.now().year)
 
@@ -405,12 +487,7 @@ async def fetch_web_context(
     wiki_entity = False
 
     if intent == "media":
-        site = "youtube.com"
         suffix = "video"
-    elif intent == "opinion":
-        site = "reddit.com"
-    elif intent == "dictionary":
-        site = "dictionary.cambridge.org"
     elif intent == "documentation":
         suffix = "documentation"
 
@@ -421,7 +498,6 @@ async def fetch_web_context(
             _cache_set(cache_key, result)
         return result
         
-    api_tasks: list = []
     if intent == "wiki":
         wiki_entity = True
         
@@ -434,31 +510,10 @@ async def fetch_web_context(
 
     searxng_q = f"site:{site} {search_query}" if site else search_query
     
-    engine_used = ""
-    found = []
+    t_search_start = time.monotonic()
     
-    # --- Primary: SearXNG ---
-    found = await _searxng_search(searxng_q, max_results=10)
-    if found:
-        engine_used = "SearXNG"
-        
-    # --- Secondary: DuckDuckGo ---
-    if not found:
-        found = await _ddg_search(search_query, site=site, max_results=10, allowed=_FANDOM_ALLOW)
-        if found: engine_used = "DuckDuckGo"
-        
-    # --- Tertiary: Tavily ---
-    if not found:
-        found = await _tavily_search(searxng_q, max_results=10)
-        if found: engine_used = "Tavily"
+    found, engine_used = await _staggered_search_cascade(searxng_q, search_query, site, 10)
 
-    if api_tasks:
-        seen_seed = {r["url"] for r in seed}
-        for res in await asyncio.gather(*api_tasks):
-            for r in res:
-                if r["url"] not in seen_seed:
-                    seed.append(r)
-                    seen_seed.add(r["url"])
     seen = {r["url"] for r in seed}
     results = seed + [r for r in found if r["url"] not in seen]
     used_fallback = False
@@ -468,27 +523,12 @@ async def fetch_web_context(
         used_fallback = True
         seen = {r["url"] for r in results}
         
-        general = []
-        
-        # --- Primary Fallback: SearXNG ---
-        # To disable SearXNG, comment out this block:
-        general = await _searxng_search(rewritten, max_results=12)
+        general, gen_engine = await _staggered_search_cascade(rewritten, rewritten, None, 12, is_fallback=True)
         if general:
-            engine_used = "SearXNG (Fallback)" if engine_used else "SearXNG"
-            
-        # --- Secondary Fallback: DuckDuckGo ---
-        # To disable DDGS, comment out this block:
-        if not general:
-            general = await _ddg_search(rewritten, site=None, max_results=12, allowed=_FANDOM_ALLOW, max_attempts=4)
-            if general: engine_used = "DuckDuckGo (Fallback)" if engine_used else "DuckDuckGo"
-            
-        # --- Tertiary Fallback: Tavily ---
-        # To disable Tavily, comment out this block:
-        if not general:
-            general = await _tavily_search(rewritten, max_results=12)
-            if general: engine_used = "Tavily (Fallback)" if engine_used else "Tavily"
-            
-        results += [r for r in general if r["url"] not in seen]
+            engine_used = f"{gen_engine} (Fallback)" if engine_used else gen_engine
+            results += [r for r in general if r["url"] not in seen]
+
+    t_search = int((time.monotonic() - t_search_start) * 1000)
 
     debug: dict = {
         "site": site or "general",
@@ -498,6 +538,8 @@ async def fetch_web_context(
         "fallback": used_fallback,
         "engine": engine_used,
         "sources": [],
+        "t_rewrite": t_rewrite,
+        "t_search": t_search,
     }
 
     if not results:
@@ -569,46 +611,67 @@ async def fetch_web_context(
 
     parts: list[str] = []
     fetched: list[tuple[dict, str, bool]] = []
-    seed_urls = {r["url"] for r in seed}
 
-    # Wave 1: fetch seeds NOW (before rerank) so I/O overlaps the embed call.
-    seed_tasks = [asyncio.ensure_future(_fetch_one(r)) for r in seed]
+    # Phase 3.6: Eager Pre-fetching (overlaps fetch I/O with embedding rerank)
+    t_rerank_start = time.monotonic()
+    
+    # 1. Eagerly kick off fetches for the heuristic top N
+    heuristic_sorted = sorted(results, key=_priority)
+    eager_batch = heuristic_sorted[:num_urls + 2]
+    fetch_tasks = {r["url"]: asyncio.ensure_future(_fetch_one(r)) for r in eager_batch}
 
-    # Semantic rerank: catches vocabulary mismatch keyword ranking misses.
-    # Falls back to keyword priority if embedding unavailable.
+    # 2. Semantic rerank (runs concurrently with eager fetches!)
     if await _rerank(rewritten, results):
         debug["rerank"] = "embed"
         results.sort(key=lambda r: (_is_junk(r["url"]), -r.get("score", 0.0)))
     else:
         results.sort(key=_priority)
-    fetch_batch = results[:num_urls + 2]
+    debug["t_rerank"] = int((time.monotonic() - t_rerank_start) * 1000)
 
-    # Collect seed fetches (already in flight).
-    if seed_tasks:
-        for r, content, method in await asyncio.gather(*seed_tasks):
-            _accept(r, content, method)
-
-    # Wave 2: race remaining fetches, taking first relevant results until full.
-    wave2 = [r for r in fetch_batch if r["url"] not in seed_urls]
-    if len(parts) < num_urls and wave2:
-        tasks = [asyncio.ensure_future(_fetch_one(r)) for r in wave2]
+    t_wave1_wait = 0.0
+    t_wave2_wait = 0.0
+    
+    # 3. Collect fetched content strictly in semantic order to guarantee highest quality wins!
+    # (Avoids the 'as_completed' race where 0ms snippets starve 1000ms full-text scrapes)
+    for r in results:
+        if len(parts) >= num_urls:
+            break
+            
+        url = r["url"]
+        is_wave2 = False
+        if url not in fetch_tasks:
+            # Diamond in the rough found by semantic rerank; fetch it now.
+            fetch_tasks[url] = asyncio.ensure_future(_fetch_one(r))
+            is_wave2 = True
+            
         try:
-            for fut in asyncio.as_completed(tasks):
-                r, content, method = await fut
-                _accept(r, content, method)
-                if len(parts) >= num_urls:
-                    break
-        finally:
-            for t in tasks:
-                if not t.done():
-                    t.cancel()
+            w_start = time.monotonic()
+            res_r, content, method = await fetch_tasks[url]
+            w_elapsed = time.monotonic() - w_start
+            
+            if is_wave2:
+                t_wave2_wait += w_elapsed
+            else:
+                t_wave1_wait += w_elapsed
+                
+            _accept(res_r, content, method)
+        except Exception as e:
+            _log.debug("Fetch failed for %s: %s", url, e)
+
+    # Cancel any remaining unused tasks to free I/O
+    for t in fetch_tasks.values():
+        if not t.done():
+            t.cancel()
+
+    debug["t_fetch_wave1"] = int(t_wave1_wait * 1000)
+    debug["t_fetch_wave2"] = int(t_wave2_wait * 1000)
 
     # Graceful degradation: fall back through looser tiers if strict gate
     # rejected everything.
     if not parts:
         got = {r["url"]: content for r, content, _ok in fetched}
         # Tier 2: any content mentioning the anchor (relaxed threshold), or highly relevant semantically.
-        for r in fetch_batch:  # priority order
+        for r in results[:num_urls + 2]:  # semantic order
             content = got.get(r["url"], "")
             if content.strip() and (not _anchor or _anchor in content.lower() or r.get("score", 0.0) > 0.4):
                 parts.append(f"Source: {r['url']}\n{content}")
@@ -618,7 +681,7 @@ async def fetch_web_context(
             debug["degraded"] = "relaxed"
     if not parts:
         # Tier 3: DDG snippets as last resort (>= 40 chars).
-        snips = [(r, (r.get("snippet") or "").strip()) for r in fetch_batch]
+        snips = [(r, (r.get("snippet") or "").strip()) for r in results[:num_urls + 2]]
         snips = [(r, s) for r, s in snips if len(s) >= 40]
         on_entity = [(r, s) for r, s in snips if not _anchor or _anchor in s.lower() or r.get("score", 0.0) > 0.4]
         for r, s in (on_entity or snips):
@@ -664,6 +727,14 @@ async def fetch_web_context(
         + "\n\n---\n\n".join(truncated_parts)
         + "\n\n=== End of Web Results ==="
     )
+    
+    debug["t_total"] = int((time.monotonic() - t_start) * 1000)
+    _log.info(
+        "Search stats for %r: rewrite=%dms, search=%dms, rerank=%dms, wave1=%dms, wave2=%dms, total=%dms",
+        query, debug.get("t_rewrite", 0), debug.get("t_search", 0), debug.get("t_rerank", 0),
+        debug.get("t_fetch_wave1", 0), debug.get("t_fetch_wave2", 0), debug.get("t_total", 0)
+    )
+    
     result = (ctx, debug)
     _cache_set(cache_key, result)
     return result
@@ -676,7 +747,7 @@ def inject_web_context(messages: list[dict], web_ctx: str) -> None:
     prefix = (
         f"{web_ctx}\n\n"
         "Use the search results above to answer accurately. "
-        "Cite specific claims inline as follow: (Source: <url>). "
+        "Cite specific claims inline by enclosing the URL in angle brackets, exactly like this: (Source: <https://...>). "
         "If sources conflict, note the disagreement. "
         "Do not fabricate information not found in the results.\n"
         "CRITICAL INSTRUCTION: You MUST reply in the exact same language as the user's latest query below, even if the search results are in a different language.\n\n"

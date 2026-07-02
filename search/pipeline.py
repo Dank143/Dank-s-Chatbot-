@@ -10,7 +10,6 @@ from .fetcher import fetch_content, skip, warmup_browser, shutdown_browser
 from .cache import _cache_get, _cache_set
 from .engines import _searxng_search, _ddg_search, _tavily_search, _FANDOM_ALLOW
 from .llm_processing import _rewrite_query, _rerank, _REGEX_INTENTS
-from .media import _fetch_media
 
 _log = logging.getLogger(__name__)
 _cfg = load_config()
@@ -55,6 +54,13 @@ async def _await_warmup() -> None:
             pass
 
 
+def _clean(results: list[dict]) -> list[dict]:
+    """Drop skip-listed domains (youtube/social/etc, fandom.com exempted) before
+    they can win a race or waste a fetch slot. DDG already filters internally;
+    this closes the same gap for SearXNG/Tavily, which don't."""
+    return [r for r in results if r.get("url") and not skip(r["url"], _FANDOM_ALLOW)]
+
+
 async def _staggered_search_cascade(
     searxng_q: str, search_query: str, site: str | None, max_results: int, is_fallback: bool = False
 ) -> tuple[list[dict], str]:
@@ -83,7 +89,7 @@ async def _staggered_search_cascade(
     # Phase 1: wait up to t1 for SearXNG
     done, pending = await asyncio.wait([searxng_task], timeout=t1)
     if searxng_task in done:
-        res = searxng_task.result()
+        res = _clean(searxng_task.result())
         if res: return res, "SearXNG"
     
     # Phase 2: SearXNG didn't return, launch DDG
@@ -93,7 +99,7 @@ async def _staggered_search_cascade(
     if pending:
         done, pending = await asyncio.wait(pending, timeout=t2, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
-            res = task.result()
+            res = _clean(task.result())
             if res:
                 for p in pending: p.cancel()
                 return res, "SearXNG" if task == searxng_task else "DuckDuckGo"
@@ -105,7 +111,7 @@ async def _staggered_search_cascade(
     while pending:
         done, pending = await asyncio.wait(pending, return_when=asyncio.FIRST_COMPLETED)
         for task in done:
-            res = task.result()
+            res = _clean(task.result())
             if res:
                 for p in pending: p.cancel()
                 if task == searxng_task: return res, "SearXNG"
@@ -155,21 +161,11 @@ async def fetch_web_context(
     suffix = ""
     wiki_entity = False
 
-    if intent == "media":
-        if "youtube" in query.lower():
-            suffix = "video"
-        else:
-            intent = "general"
-    elif intent == "documentation":
+    if intent == "documentation":
         suffix = "documentation"
 
     seed: list[dict] = []
-    if suffix == "video":
-        result = await _fetch_media(rewritten, query, num_urls)
-        if result[0]:
-            _cache_set(cache_key, result)
-        return result
-        
+
     if intent == "wiki":
         wiki_entity = True
         
@@ -204,6 +200,7 @@ async def fetch_web_context(
 
     debug: dict = {
         "site": site or "general",
+        "intent": intent,
         "original_query": query,
         "rewritten_query": rewritten,
         "query": search_query,
@@ -268,6 +265,12 @@ async def fetch_web_context(
         return sum(t in cl for t in _terms) >= _threshold
 
     async def _fetch_one(r: dict) -> tuple[dict, str, str]:
+        u = r["url"].lower()
+        if "youtube.com/watch" in u or "youtu.be/" in u:
+            title = (r.get("title") or "").strip()
+            snip = (r.get("snippet") or "").strip()
+            content = f"Title: {title}\nDescription: {snip}"
+            return r, content, "snippet"
         content, method = await fetch_content(r["url"], r["snippet"])
         return r, content, method
 
@@ -358,8 +361,7 @@ async def fetch_web_context(
     debug["t_fetch_wave1"] = int(t_wave1_wait * 1000)
     debug["t_fetch_wave2"] = 0
 
-    # Graceful degradation: fall back through looser tiers if strict gate
-    # rejected everything.
+    # Graceful degradation: fall back through looser tiers if strict gate rejected everything.
     if not parts:
         got = {r["url"]: content for r, content, _ok in fetched}
         # Tier 2: any content mentioning the anchor (relaxed threshold), or highly relevant semantically.
@@ -398,7 +400,6 @@ async def fetch_web_context(
         return "", debug
 
     # Enforce a hard character limit to prevent blowing out the model's context window.
-    # We allocate 25,000 characters total across all parts.
     max_total_chars = 25000
     truncated_parts = []
     current_length = 0
@@ -433,22 +434,20 @@ async def fetch_web_context(
 
 
 def inject_web_context(messages: list[dict], web_ctx: str) -> None:
-    """Prepend the web context + citation instructions to the last user message."""
+    """Append the web context + citation instructions to the system message for prompt caching."""
     if not web_ctx:
         return
-    prefix = (
-        f"{web_ctx}\n\n"
+    
+    suffix = (
+        f"\n\n{web_ctx}\n\n"
         "Use the search results above to answer accurately. "
         "Cite specific claims inline by enclosing the URL in angle brackets, exactly like this: (Source: <https://...>). "
         "If sources conflict, note the disagreement. "
         "Do not fabricate information not found in the results.\n"
-        "CRITICAL INSTRUCTION: You MUST reply in the exact same language as the user's latest query below, even if the search results are in a different language.\n\n"
+        "CRITICAL INSTRUCTION: You MUST reply in the exact same language as the user's latest query, even if the search results are in a different language."
     )
-    last = messages[-1]
-    if isinstance(last["content"], str):
-        last["content"] = prefix + last["content"]
+    
+    if messages and messages[0]["role"] == "system":
+        messages[0]["content"] += suffix
     else:
-        for part in last["content"]:
-            if isinstance(part, dict) and part.get("type") == "text":
-                part["text"] = prefix + part["text"]
-                break
+        messages.insert(0, {"role": "system", "content": suffix.lstrip()})

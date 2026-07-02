@@ -1,189 +1,129 @@
 # Web Search Pipeline
 
-Free-tier web search and content retrieval for the chatbot. Given a user query, it
-discovers relevant sources, fetches their content, ranks it semantically, and returns
-a context block that gets injected into the LLM prompt.
+Free-tier and self-hosted web search and content retrieval for the chatbot. Given a user query, it discovers relevant sources, fetches their content, ranks it semantically, and returns a context block that gets injected into the LLM prompt.
 
-No paid APIs. Discovery uses DuckDuckGo (via `ddgs`) plus open MediaWiki APIs;
-content is fetched via Jina Reader, direct extraction (trafilatura), MediaWiki APIs,
-and Playwright; ranking uses NVIDIA NIM embeddings.
+No paid APIs. Discovery uses self-hosted SearXNG and DuckDuckGo (via `ddgs`) plus open MediaWiki APIs; content is fetched via Jina Reader, direct extraction (trafilatura), MediaWiki APIs, and Playwright; ranking uses local or NIM embeddings.
 
-## Module layout
+## Module Layout
 
 | File | Responsibility |
 |------|----------------|
-| `pipeline.py` | Orchestration: rewrite → route → search → rerank → fetch → assemble |
-| `classifier.py` | Intent routing (media / reddit / dictionary / docs) and entity detection |
-| `fetcher.py` | Content retrieval (Jina, trafilatura, MediaWiki, Playwright) + skip rules |
+| `pipeline.py` | Orchestration: rewrite → route → staggered search cascade → rerank → time-boxed fetch → assemble |
+| `engines.py` | Search engine integrations: SearXNG (primary), DuckDuckGo (secondary), Tavily (tertiary). |
+| `fetcher.py` | Content retrieval (Jina, trafilatura, MediaWiki, Playwright) + skip rules + host-fetcher caching. |
+| `llm_processing.py` | LLM-based query rewriting, intent classification, and semantic reranking using embeddings. |
+| `media.py` | YouTube media search and link extraction. |
+| `cache.py` | Simple in-memory caching layer for search results. |
 
 Entry point: `fetch_web_context(query, num_urls, history_context) -> (context, debug)`.
 
-## End-to-end flow
+## End-to-End Flow
 
-```
+```text
 query + history
    │
    ▼
-[1] cache check ──hit──► return cached (context, debug)
+[1] Cache Check ──hit──► return cached (context, debug)
    │ miss
    ▼
-[2] LLM rewrite (NIM)            resolve "his/it", standalone query, +year
-   │
+[2] Intent Classification & Query Rewrite (Regex Fast-Path / LLM)
+   │  If regex matches (e.g., "opinion", "youtube", "error"), instant route!
+   │  Else, race Ollama vs NIM to rewrite query & detect intent (5s timeout).
    ▼
-[3] classify(rewritten)
-   │
-   ├─ suffix == "video" ──► [3a] media path: YouTube links only (no scraping) ──► return
+[3] Routing
+   ├─ intent == "media" ──► YouTube links only (no scraping) ──► return
    ├─ intent (reddit/cambridge/docs) ──► build site-scoped query
-   ├─ entity (proper noun) ──► [4] wiki discovery
+   ├─ intent == "wiki" (entity) ──► Wiki discovery (MediaWiki/Fandom APIs)
    └─ else ──► general query
    │
    ▼
-[4] discovery (entity queries)        ──┐
-     DDG probe "{query} wiki"           │  parallel
-     ├─ discover_wiki_host()            │  (gathered)
-     ├─ official wiki MediaWiki API ────┤
-     └─ fandom MediaWiki API ───────────┘
-   │
+[4] Staggered Search Cascade (SearXNG → DuckDuckGo → Tavily)
+   │  SearXNG is queried first. If it takes > 2.0s (1.0s for fallbacks), DDG is
+   │  launched concurrently. If both fail, Tavily is called.
+   │  If site-scoped results are < num_urls/2, a general fallback cascade runs.
    ▼
-[5] DDG search (site-scoped)     runs concurrently with [4]'s API calls
-   │  └─ general fallback only if coverage thin
+[5] Merge Results
+   │  Merge API-discovered seed URLs + Search Cascade results, deduped.
    ▼
-[6] merge: seed (probe + API hits) + DDG results, deduped
-   │
+[6] Semantic Reranking
+   │  Query and result snippets are embedded using Ollama vs NIM embeddings.
+   │  Results are sorted by cosine similarity; junk pages are demoted.
    ▼
-[7] embedding rerank (NIM nv-embedqa-e5-v5)
-   │  cosine(query, snippet) → semantic order; junk pages demoted
-   │  (falls back to keyword priority if embeddings unavailable)
+[7] Time-Boxed Hybrid Fetch Collection
+   │  The top N+2 results are fetched concurrently.
+   │  The loop waits up to 5.0 seconds (budget) to collect fetches.
+   │  It breaks early if `num_urls` acceptable results are successfully loaded.
+   │  Fast responders are then processed strictly in semantic order!
    ▼
-[8] fetch top N+2 concurrently
-   │  wave 1: seed pages (gathered)   ─ high-value, never starved
-   │  wave 2: rest (race, early-break) ─ fast
+[8] Tiered Acceptance & Formatting
+   │  Filters fetched content based on strict/relaxed heuristic rules (anchor filtering).
+   │  Truncates total context to 25,000 characters to prevent context blowout.
    ▼
-[9] tiered acceptance (never return empty when URLs exist)
-   │  strict   → anchor entity ≥3× + half query terms
-   │  relaxed  → on-entity content (anchor present)
-   │  snippet  → DDG snippets, prefer on-entity
-   ▼
-[10] assemble context block + cache → return
+[9] Assemble & Return
 ```
 
-## Stage detail
+## Stage Details
 
-### [1] Cache
-In-memory, 5-minute TTL, keyed on `(query, history[:200], num_urls)`. Whole
-`(context, debug)` result is cached.
+### [1] Caching
+In-memory, 5-minute TTL, keyed on `(query, history_hash, num_urls)`. The entire `(context, debug)` tuple is cached to skip downstream work.
 
-### [2] Query rewrite
-A NIM chat model rewrites the latest message into one standalone search query,
-resolving pronouns from the conversation ("his voicelines" → "Pantheon voicelines").
-The current year is appended for freshness unless the query already names one.
-On failure (timeout/error) it falls back to the raw query.
+### [2] Query Rewrite & Intent (`llm_processing.py`)
+A fast-path checks for basic intents using Regex (e.g., matching the word "opinion", "youtube", "traceback"). If matched, the query avoids the LLM entirely (0ms latency). 
 
-### [3] Routing — `classify()`
-Keyword rules map the query to an intent (first match wins):
+If no match, a race between Ollama and NIM models determines the standalone search query and intent, resolving pronouns from conversation history (e.g., "his voicelines" → "Pantheon voicelines"). The current year is appended for freshness.
 
-| Intent | Target | Output |
-|--------|--------|--------|
-| media (trailer, MV, soundtrack, "youtube", "cinematic", …) | YouTube | links only |
-| opinion (best, vs, "should I", VI equivalents) | reddit.com | site-scoped |
-| dictionary (synonym, "meaning of", VI equivalents) | dictionary.cambridge.org | site-scoped |
-| code (error:, traceback, pip install, …) | — | `documentation` suffix |
-| entity (contains a proper noun) | runtime-discovered wiki | see [4] |
-| none of the above | — | general search |
+Keyword rules map the query to an intent:
+- **media**: YouTube (links only)
+- **opinion**: reddit.com (site-scoped)
+- **dictionary**: dictionary.cambridge.org (site-scoped)
+- **documentation**: adds `documentation` suffix
+- **wiki**: Triggers specialized entity discovery
+- **general**: Normal search
 
-Patterns cover English and Vietnamese. `"what is X"` style queries skip the
-dictionary route and go through entity detection instead.
+### [3] Wiki Discovery
+For wiki intent, standard search engines often drop key subpages. The pipeline performs specialized discovery:
+1. Searches the Fandom MediaWiki API in parallel (since Fandom HTML is skip-listed from scraping, but its API is open).
+2. Probes for official wikis and uses their MediaWiki API to fetch exact pages.
+These discovered URLs are used as **seed URLs** and injected directly into the fetch wave.
 
-#### [3a] Media path
-YouTube is normally skip-listed (can't scrape). For media intent we instead query
-`site:youtube.com` and return the **video links only** — no content fetch, no
-relevance gate. Results are filtered to real watch URLs and deduped by video id.
+### [4] Staggered Search Cascade (`engines.py` & `pipeline.py`)
+Instead of blasting all engines simultaneously (which causes rate limits) or waiting for them sequentially (which causes UI freezing):
+- **SearXNG** is the primary engine (self-hosted).
+- **DuckDuckGo** starts if SearXNG doesn't respond within 2.0s (1.0s for fallbacks).
+- **Tavily** starts if both fail to return results.
 
-### [4] Wiki discovery (entity queries)
-1. A DDG probe (`"{query} wiki"`) finds candidate wiki hosts; `discover_wiki_host()`
-   scores them by term-in-URL overlap + article-path bonus.
-2. The discovered host's **MediaWiki search API** is queried for exact pages —
-   deterministic, unlike DDG ranking. (Wikipedia + most wikis; Cloudflare-blocked
-   wikis return nothing and fall back to DDG.)
-3. **Fandom** is also queried via its MediaWiki API in parallel — it is skip-listed
-   for scraping, but its API is open, covering the game/lore long tail.
+### [5] Semantic Reranking (`llm_processing.py`)
+Results are reranked using semantic embeddings. Ollama and NIM embedding models are raced concurrently. This ensures results conceptually similar to the query bubble up, even if keywords mismatch (e.g. "voicelines" ≈ a page titled "Audio"). Junk meta pages (Category:, Talk:) are demoted.
 
-The probe results on the discovered host are reused as **seed URLs** because DDG's
-site-scoped search routinely drops key subpages (e.g. `.../Pantheon/Audio`).
+### [6] Time-Boxed Fetching (`fetcher.py` & `pipeline.py`)
+To prevent a single slow website from freezing the chatbot, `pipeline.py` uses a **Time-Boxed Hybrid Loop**. 
+- It kicks off fetches for the top `num_urls + 2` semantic hits concurrently.
+- It waits a maximum of **5.0 seconds**.
+- If `num_urls` fast websites finish before the timeout, it stops waiting early.
+- To guarantee quality, the collected fast websites are ordered by their original semantic rank.
 
-Only a successfully discovered host is cached (per lead token), so a transient probe
-failure retries next time instead of poisoning the cache.
+Fetch methods race or fallback gracefully:
+- **MediaWiki API**: Used for known wikis.
+- **Jina Reader**: Fallback for JS-heavy sites.
+- **Trafilatura**: Fast direct HTML extraction.
+- **Playwright**: Used specifically for Cloudflare-protected domains like Reddit.
 
-### [5]/[6] DDG search + merge
-The site-scoped DDG search runs concurrently with the API calls in [4]. Results are
-merged: `seed (probe + API) + DDG`, deduplicated by URL. A second general (un-scoped)
-search runs only when coverage is thin (`< num_urls/2`).
+A per-host cache remembers which fetcher succeeded last time, avoiding redundant fallback attempts and saving significant latency.
 
-### [7] Embedding rerank
-Query and result snippets are embedded with `nvidia/nv-embedqa-e5-v5`
-(`input_type` query/passage; two calls, gathered). Results are ordered by cosine
-similarity — this catches vocabulary mismatch that keyword ranking misses
-("voicelines" ≈ a page titled "Audio"). Junk meta pages (Category:/Talk:/…) stay
-demoted. If embeddings are unavailable, it falls back to a keyword priority heuristic.
+### [7] Tiered Acceptance
+To avoid returning an empty context, content goes through layered filters:
+1. **Strict**: Content must mention the anchor entity ≥3× and repeat half the query terms.
+2. **Relaxed**: Any on-entity full content (anchor present at all).
+3. **Snippet**: DDG snippets, preferring those that name the entity.
 
-### [8] Fetch — `fetch_content()`
-The top `num_urls + 2` are fetched concurrently in two waves:
-- **Wave 1** — seed pages, fully gathered. The highest-value page is often the
-  largest (a transcript/`Audio` page) and thus slowest; this guarantees it isn't
-  cancelled by completion-order racing.
-- **Wave 2** — the rest, raced with early-break once enough relevant results are in.
+## Reliability Features
+- **Concurrent Provider Racing**: LLM rewrites and embeddings race Ollama vs NIM, falling back seamlessly if one provider is down.
+- **Hard Context Limits**: The final text is strictly truncated to 25,000 characters to protect the LLM context window.
 
-Per URL, `fetch_content` prefers the host's known-good fetcher (learned cache) and
-only races the others on a miss:
-- **MediaWiki API** (`extracts`) for wikis with an open API
-- **Jina Reader** (`r.jina.ai`) for JS-heavy pages — retries once on transient failure
-- **trafilatura** for direct HTML extraction
-- **Playwright** fallback for Cloudflare-gated hosts (e.g. reddit)
-- **snippet** as last resort
+## Configuration Defaults
 
-Content is truncated at `_MAX_CHARS` (12345). A per-host cache records which fetcher
-worked, cutting ~⅔ of fetch requests after warmup.
-
-### [9] Tiered acceptance
-To avoid returning an empty context when sources were found:
-1. **Strict** — content must mention the anchor entity ≥3× and repeat half the query
-   terms (rejects wrong-but-same-franchise pages).
-2. **Relaxed** — any on-entity full content (anchor present at all).
-3. **Snippet** — DDG snippets, preferring those that name the entity.
-
-Empty is only possible when discovery returns zero URLs.
-
-### [10] Injection — `inject_web_context()`
-The assembled block is prepended to the last user message with instructions to cite
-sources inline and not fabricate beyond the results.
-
-## Reliability layers
-
-`rewrite retry → DDG retry (3, backoff) → multi-source seeding (probe + official API
-+ fandom API + DDG) → embedding rerank → keyword gate → tiered fallback → per-host
-fetcher cache`.
-
-- **Startup Warmup**: On server boot, a shared persistent `DDGS` session is initialized and warmed up to bypass initial DuckDuckGo anti-bot rate limits. Concurrently, a dummy query is sent to SearXNG to force its internal docker workers to spin up and resolve DNS, avoiding massive cold-start penalties on the first user query.
-- **Strict Engine Timeouts**: Local `SearXNG` searches are wrapped in a strict `5.0s` timeout guard. If the SearXNG container hangs or takes too long to aggregate results, it aborts instantly and falls back to DuckDuckGo, guaranteeing the UI stream never freezes.
-
-## Configuration
-
-| Constant | File | Value | Meaning |
-|----------|------|-------|---------|
-| `_REWRITE_MODEL` | pipeline.py | `qwen/qwen3-next-80b-a3b-instruct` | query rewriter |
-| `_EMBED_MODEL` | pipeline.py | `nvidia/nv-embedqa-e5-v5` | rerank embeddings |
-| `_CACHE_TTL` | pipeline.py | 300 | result cache seconds |
-| `_DDG_BACKENDS` | pipeline.py | duckduckgo, google, bing, brave, startpage | pinned (skips flaky mojeek) |
-| `_MAX_URLS` | pipeline.py | config `defaults.max_search_urls` (5) | sources per query |
-| `_MAX_CHARS` | fetcher.py | 12345 | chars per source |
-| `_JINA_TIMEOUT` | fetcher.py | 10 | Jina request timeout |
-
-## Known limits
-
-- **Discovery ceiling** — finding *which* wiki/site exists for an entity relies on
-  DuckDuckGo, which is nondeterministic and rate-limits. This is the dominant source
-  of latency and the rare wrong-result. There is no free SERP alternative; breaking
-  past it requires a paid search API. Everything *within* a discovered host is now
-  deterministic (MediaWiki APIs).
-- **Latency** is external-bound: ~4-6s healthy, higher when DDG backends are slow.
-- **Cache is in-memory** — cleared on restart.
+- `defaults.max_search_urls`: 5 sources per query
+- Fetch max chars: 20000
+- Jina timeout: 5.0s
+- Playwright timeout: 10.0s
+- Rerank/Rewrite race timeouts: 5.0s

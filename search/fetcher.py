@@ -72,7 +72,7 @@ _MW_HEADERS = {"User-Agent": "NIMChatbot/1.0 (web-search; contact vibecodersunit
 _mw_client = httpx.AsyncClient(timeout=6.0, follow_redirects=True, headers=_MW_HEADERS, limits=_limits)
 
 _SKIP_DOMAINS = {
-    "youtube.com", "youtu.be", "twitter.com", "x.com",
+    "twitter.com", "x.com",
     "instagram.com", "tiktok.com", "facebook.com",
     "fandom.com",
 }
